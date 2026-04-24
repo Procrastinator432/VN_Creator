@@ -1,0 +1,11 @@
+[package]
+name = "VN_Creator"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+eframe = "0.34.1"
+egui_extras = { version = "0.34.1", features = ["all_loaders"] }
+rodio = "0.22.2"
