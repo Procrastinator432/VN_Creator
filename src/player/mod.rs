@@ -1,12 +1,13 @@
 use eframe::egui;
 use serde::{Deserialize, Serialize};
-use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player};
+// NEU: 'Source' importiert, damit wir die Musik in Dauerschleife (.repeat_infinite()) abspielen können!
+use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Source};
 
 // --- DATENMODEL ---
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Chapter {
     pub title: String,
-    pub theme: Option<Theme>, // NEU: Das optionale Design-Thema!
+    pub theme: Option<Theme>,
     pub actions: Vec<Action>,
 }
 
@@ -14,17 +15,16 @@ pub struct Chapter {
 pub struct Theme {
     pub textbox_color: Option<[u8; 4]>,
     pub frame_color: Option<[u8; 4]>,
-    pub show_character_frames: Option<bool>, // NEU: Nur für die Charaktere
-    pub show_textbox_frame: Option<bool>,    // NEU: Nur für die Haupt-Textbox
+    pub show_character_frames: Option<bool>,
+    pub show_textbox_frame: Option<bool>,
 }
-
-// ... (Der Rest von Action, CharacterPosition etc. bleibt gleich)
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum Action {
     SetBackground { image_path: String },
-    ShowCharacter { character_id: String, image_path: String }, // "position" entfernt!
+    ShowCharacter { character_id: String, image_path: String },
     Dialogue { speaker_name: Option<String>, text: String, audio_path: Option<String> },
+    PlayMusic { audio_path: String }, // NEU: Musik als Aktion
 }
 
 struct ActiveCharacter {
@@ -38,29 +38,33 @@ pub struct VnPlayer {
     current_index: usize,
 
     current_background: Option<String>,
-    current_bg_aspect: f32, // NEU: Merkt sich das dynamische Bildformat
+    current_bg_aspect: f32,
 
     active_characters: Vec<ActiveCharacter>,
 
     current_speaker: Option<String>,
     current_text: String,
 
-    // NEU: Lade-System
     is_loading: bool,
     preload_uris: Vec<String>,
 
     is_finished: bool,
+
+    // --- AUDIO SYSTEM ---
     _audio_stream: MixerDeviceSink,
-    audio_player: Player,
+    audio_player: Player, // Für Dialoge/Sprache
+    bgm_player: Player,   // NEU: Für Hintergrundmusik
 }
 
 impl VnPlayer {
     pub fn new(chapter: Chapter) -> Self {
         let stream_handle = DeviceSinkBuilder::open_default_sink()
             .expect("Konnte kein Audio-Gerät finden!");
-        let player = Player::connect_new(stream_handle.mixer());
 
-        // NEU: Wir suchen VOR dem Start alle Bilder zusammen, die in diesem Kapitel vorkommen
+        // Wir erstellen direkt ZWEI getrennte Player, die auf demselben Mixer liegen!
+        let voice_player = Player::connect_new(stream_handle.mixer());
+        let bgm_player = Player::connect_new(stream_handle.mixer());
+
         let mut preload_uris = Vec::new();
         for action in &chapter.actions {
             match action {
@@ -80,15 +84,16 @@ impl VnPlayer {
             chapter,
             current_index: 0,
             current_background: None,
-            current_bg_aspect: 16.0 / 9.0, // Standardwert
+            current_bg_aspect: 16.0 / 9.0,
             active_characters: vec![],
             current_speaker: None,
             current_text: String::new(),
-            is_loading: true, // Das Spiel startet im Ladebildschirm!
+            is_loading: true,
             preload_uris,
             is_finished: false,
             _audio_stream: stream_handle,
-            audio_player: player,
+            audio_player: voice_player, // Spieler 1 für Voice
+            bgm_player,                 // Spieler 2 für Musik
         };
 
         vn_player.process_actions_until_dialogue();
@@ -102,29 +107,43 @@ impl VnPlayer {
             match action {
                 Action::SetBackground { image_path } => {
                     self.current_background = Some(image_path.clone());
-
-                    // NEU: Wir lesen in Millisekunden das Format des Bildes aus (z.B. für Hochkant-Bilder)
                     if let Ok(dimensions) = image::image_dimensions(image_path) {
                         self.current_bg_aspect = dimensions.0 as f32 / dimensions.1 as f32;
                     } else {
                         self.current_bg_aspect = 16.0 / 9.0;
                     }
-
                     self.current_index += 1;
                 }
                 Action::ShowCharacter { character_id, image_path } => {
                     self.active_characters.retain(|c| c.id != *character_id);
-
                     self.active_characters.push(ActiveCharacter {
                         id: character_id.clone(),
                         image_path: image_path.clone(),
                     });
                     self.current_index += 1;
                 }
+                // --- FIX: DIE FEHLENDE MUSIK LOGIK WURDE HINZUGEFÜGT ---
+                Action::PlayMusic { audio_path } => {
+                    // Egal was passiert: Wir stoppen alte Musik, indem wir den BGM-Player erneuern
+                    self.bgm_player = Player::connect_new(self._audio_stream.mixer());
+
+                    // Wenn der Pfad nicht leer ist, starten wir das neue Lied
+                    if !audio_path.trim().is_empty() {
+                        if let Ok(file) = std::fs::File::open(audio_path) {
+                            if let Ok(source) = Decoder::try_from(file) {
+                                // .repeat_infinite() zwingt den Player, den Track endlos zu wiederholen!
+                                self.bgm_player.append(source.repeat_infinite());
+                            }
+                        }
+                    }
+                    // Danach machen wir direkt weiter, da Musik das Spiel nicht stoppt!
+                    self.current_index += 1;
+                }
                 Action::Dialogue { speaker_name, text, audio_path } => {
                     self.current_speaker = speaker_name.clone();
                     self.current_text = text.clone();
 
+                    // Bei jedem neuen Satz erneuern wir den VOICE-Player, damit sich Stimmen nicht überlagern
                     if let Some(path) = audio_path {
                         if let Ok(file) = std::fs::File::open(path) {
                             self.audio_player = Player::connect_new(self._audio_stream.mixer());
@@ -149,7 +168,6 @@ impl VnPlayer {
         self.process_actions_until_dialogue();
     }
 
-    // --- HILFSFUNKTION (REPARIERT): Zeichnet eine einzelne Porträt-Spalte ---
     fn draw_portrait_column(
         &self,
         ui: &mut egui::Ui,
@@ -160,57 +178,36 @@ impl VnPlayer {
     ) {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
         let mut col_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-
         col_ui.set_clip_rect(rect);
 
         if let Some(char) = character {
             let uri = format!("file://{}", char.image_path);
-
             frame.show(&mut col_ui, |ui| {
                 let available_size = ui.available_size();
-
-                // 1. Wir reservieren den exakten inneren Platz.
-                // Das zwingt den Rahmen auf seine finale Größe, er wird nicht mehr wachsen.
                 let (_, inner_rect) = ui.allocate_space(available_size);
 
-                // 2. DER FIX: Wir erstellen eine UNABHÄNGIGE Child-UI für das Bild.
-                // Wenn wir das Bild jetzt zeichnen, sprengt es nicht mehr die Grenzen
-                // der Eltern-UI und der Rahmen bleibt komplett sichtbar!
                 let mut image_ui = ui.new_child(egui::UiBuilder::new().max_rect(inner_rect));
-                image_ui.set_clip_rect(inner_rect); // Hier wird nur das Bild beschnitten
+                image_ui.set_clip_rect(inner_rect);
 
-                // --- BILD LADEN UND SKALIEREN ---
                 if let Ok(egui::load::TexturePoll::Ready { texture, .. }) =
                     ui.ctx().try_load_texture(&uri, egui::TextureOptions::default(), egui::SizeHint::default())
                 {
-                    // Wichtig: 'as f32' behalten, damit das Seitenverhältnis korrekt berechnet wird
                     let image_aspect = texture.size[0] / texture.size[1];
                     let frame_aspect = inner_rect.width() / inner_rect.height();
-
                     let mut target_size = inner_rect.size();
 
-                    // Deine Original-Logik: Das Bild so skalieren, dass es die Box ausfüllt ("Cover")
                     if frame_aspect > image_aspect {
                         target_size.y = inner_rect.width() / image_aspect;
                     } else {
                         target_size.x = inner_rect.height() * image_aspect;
                     }
 
-                    // Ausrichtung: Oben anlegen (Top-Left)
                     let image_rect = egui::Rect::from_min_size(inner_rect.min, target_size);
-
-                    let image = egui::Image::new(&uri)
-                        .fit_to_exact_size(target_size)
-                        .maintain_aspect_ratio(false);
-
-                    // 3. Wir zeichnen das Bild in unsere isolierte image_ui!
+                    let image = egui::Image::new(&uri).fit_to_exact_size(target_size).maintain_aspect_ratio(false);
                     image_ui.put(image_rect, image);
-
                 } else {
                     let mut spinner_ui = image_ui.new_child(egui::UiBuilder::new().max_rect(inner_rect));
-                    spinner_ui.centered_and_justified(|ui| {
-                        ui.spinner();
-                    });
+                    spinner_ui.centered_and_justified(|ui| { ui.spinner(); });
                 }
             });
         }
@@ -218,21 +215,14 @@ impl VnPlayer {
 }
 
 // --- EGUI BENUTZEROBERFLÄCHE ---
-impl eframe::App for VnPlayer {
+impl VnPlayer {
+    pub fn ui(&mut self, ui: &mut egui::Ui) {
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-
-        // --- DER LADEBILDSCHIRM ---
         if self.is_loading {
             let mut loaded_count = 0;
-
             for uri in &self.preload_uris {
-                // FIX: Wir nutzen 'try_load_texture' statt 'try_load_image'
-                // und übergeben zusätzlich die Standard-Texturoptionen!
                 if let Ok(egui::load::TexturePoll::Ready { .. }) = ui.ctx().try_load_texture(
-                    uri,
-                    egui::TextureOptions::default(),
-                    egui::SizeHint::default()
+                    uri, egui::TextureOptions::default(), egui::SizeHint::default()
                 ) {
                     loaded_count += 1;
                 }
@@ -255,7 +245,6 @@ impl eframe::App for VnPlayer {
             }
         }
 
-        // --- DAS EIGENTLICHE SPIEL ---
         if self.is_finished {
             ui.centered_and_justified(|ui| {
                 ui.heading("Kapitel beendet.");
@@ -266,16 +255,13 @@ impl eframe::App for VnPlayer {
         let mut advance_chapter = false;
         let full_rect = ui.max_rect();
 
-        // --- 1. HINTERGRUND (Dynamischer "Cover" Zoom) ---
         if let Some(bg) = &self.current_background {
             let uri = format!("file://{}", bg);
-
             let mut bg_ui = ui.new_child(egui::UiBuilder::new().max_rect(full_rect));
-            bg_ui.set_clip_rect(full_rect); // Alles abschneiden, was übersteht!
+            bg_ui.set_clip_rect(full_rect);
 
             let bg_aspect = self.current_bg_aspect;
             let win_aspect = full_rect.width() / full_rect.height();
-
             let mut target_size = full_rect.size();
 
             if win_aspect > bg_aspect {
@@ -285,20 +271,15 @@ impl eframe::App for VnPlayer {
             }
 
             bg_ui.centered_and_justified(|ui| {
-                let image = egui::Image::new(&uri)
-                    .fit_to_exact_size(target_size)
-                    .maintain_aspect_ratio(false); // Die Mathematik oben verhindert die Verzerrung
-
+                let image = egui::Image::new(&uri).fit_to_exact_size(target_size).maintain_aspect_ratio(false);
                 ui.add(image);
             });
         }
 
-        // --- 2. TEXTBOX BEREICH ---
         let textbox_height = (full_rect.height() * 0.30).max(180.0);
         let mut textbox_rect = full_rect;
         textbox_rect.set_top(full_rect.bottom() - textbox_height);
 
-        // --- 3. SPRECHER ZUORDNEN ---
         let mut active_char = None;
         let mut inactive_char = None;
 
@@ -317,7 +298,6 @@ impl eframe::App for VnPlayer {
             inactive_char = iter.next();
         }
 
-        // --- 4. THEME AUSLESEN ---
         let mut box_bg = egui::Color32::from_black_alpha(230);
         let mut frame_color = egui::Color32::from_white_alpha(150);
         let mut show_char_frames = false;
@@ -330,27 +310,18 @@ impl eframe::App for VnPlayer {
             if let Some(stf) = theme.show_textbox_frame { show_text_frame = stf; }
         }
 
-        // --- 5. TEXTBOX UND PORTRÄTS ZEICHNEN ---
         let mut text_ui = ui.new_child(egui::UiBuilder::new().max_rect(textbox_rect));
 
         egui::Frame::default()
             .fill(box_bg)
-            // Nutzt jetzt die EIGENE Variable für den Textbox-Rahmen!
             .stroke(if show_text_frame { egui::Stroke::new(2.0, frame_color) } else { egui::Stroke::NONE })
             .inner_margin(0.0)
             .show(&mut text_ui, |ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
 
-                // --- HIER IST DIE NEUE MATHEMATIK FÜR DIE PORTRÄTS ---
-                // Anstatt die Breite vom Fenster zu nehmen, koppeln wir sie an die HÖHE der Textbox.
-                // Faktor 1.0 = Ein perfektes Quadrat (z.B. 180x180 Pixel).
-                // Faktor 0.8 = Etwas schmaler (Klassisches Hochkant-Porträt).
                 let portrait_width = textbox_height * 0.8;
-
-                // Der Text bekommt den restlichen Platz. (max(100.0) verhindert Abstürze bei extrem winzigen Fenstern)
                 let text_width = (textbox_rect.width() - (portrait_width * 2.0)).max(100.0);
 
-                // --- DEN RAHMEN FÜR CHARAKTERE DEFINIEREN ---
                 let portrait_frame = if show_char_frames {
                     egui::Frame::default()
                         .fill(egui::Color32::from_black_alpha(100))
@@ -362,12 +333,8 @@ impl eframe::App for VnPlayer {
                 };
 
                 ui.horizontal(|ui| {
-
-                    // --- LINKE SPALTE (Aktiver Sprecher) ---
-                    // Wir rufen einfach unsere neue Funktion auf! (.clone() stellt sicher, dass wir den Rahmen wiederverwenden können)
                     self.draw_portrait_column(ui, active_char, portrait_frame.clone(), portrait_width, textbox_height);
 
-                    // --- MITTLERE SPALTE (Text) ---
                     let (mid_rect, _) = ui.allocate_exact_size(egui::vec2(text_width, textbox_height), egui::Sense::hover());
                     let mut mid_ui = ui.new_child(egui::UiBuilder::new().max_rect(mid_rect));
 
@@ -391,9 +358,7 @@ impl eframe::App for VnPlayer {
                         });
                     });
 
-                    // --- RECHTE SPALTE (Inaktiver Sprecher) ---
                     self.draw_portrait_column(ui, inactive_char, portrait_frame, portrait_width, textbox_height);
-
                 });
             });
 

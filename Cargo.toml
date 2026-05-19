@@ -1,6 +1,6 @@
 [package]
 name = "VN_Creator"
-version = "0.2.0"
+version = "1.0.0"
 edition = "2024"
 
 [dependencies]
@@ -10,3 +10,4 @@ eframe = "0.34.2"
 egui_extras = { version = "0.34.2", features = ["all_loaders"] }
 rodio = "0.22.2"
 image = "0.25.10"
+rfd = "0.17.2"
