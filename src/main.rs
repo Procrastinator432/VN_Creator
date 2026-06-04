@@ -1,27 +1,74 @@
+mod models;
+mod settings;
 mod player;
 mod editor;
 
-use eframe::egui;
-use player::{VnPlayer, Chapter};
+use player::VnPlayer;
 use editor::VnEditor;
+use settings::Settings;
+use models::Chapter;
+use eframe::egui;
+
+// --- HILFE SYSTEM ---
+struct HelpChapter {
+    title: &'static str,
+    content: &'static str,
+}
+
+struct HelpState {
+    search_query: String,
+    selected_chapter: usize,
+    chapters: Vec<HelpChapter>,
+}
+
+impl HelpState {
+    fn new() -> Self {
+        Self {
+            search_query: String::new(),
+            selected_chapter: 0,
+            chapters: vec![
+                HelpChapter {
+                    title: "1. Grundlagen (Spielen & Speichern)",
+                    content: "Willkommen im Visual Novel Studio!\n\nUm ein Spiel zu starten, klicke im Hauptmenü auf 'Spiel laden & starten' und wähle eine JSON-Datei (wie z.B. 'test_chapter.json').\nWährend des Lesens kannst du oben rechts auf 'Menü' klicken, um das Spiel zu pausieren, Einstellungen zu ändern oder deinen aktuellen Fortschritt in einem neuen Savegame abzuspeichern. Das Logbuch oben links lässt dich vergangene Dialoge nachlesen."
+                },
+                HelpChapter {
+                    title: "2. Editor: Kapitel erstellen",
+                    content: "Mit 'Neuen Editor öffnen' kannst du eigene Geschichten schreiben.\nDu kannst oben einen Titel festlegen und unter 'Kapitel-Design' die Farben für die Textboxen anpassen.\nFüge über die Buttons Aktionen (wie Dialoge oder Bilder) zu deiner Zeitleiste hinzu. Mit Drag & Drop (oder den ⬆/⬇ Pfeilen) kannst du Aktionen sortieren. Vergiss nicht, regelmäßig oben links zu speichern!"
+                },
+                HelpChapter {
+                    title: "3. Medien (Bilder & Audio)",
+                    content: "Das Studio kopiert deine gewählten Dateien automatisch in den Ordner 'assets'.\n- Hintergrundbilder (16:9 empfohlen) und Charaktere (mit transparentem Hintergrund) können via 'Wahl' Button eingefügt werden.\n- Audio-Dateien (MP3, WAV, OGG) können für Musik (Dauerschleife), SFX (einmalig) oder Voice (pro Textbox) genutzt werden.\nDie Text-Geschwindigkeit richtet sich automatisch nach der Länge der Voice-Datei."
+                },
+                HelpChapter {
+                    title: "4. Entscheidungen & Branching",
+                    content: "Um deine Story nicht-linear zu machen, nutze Labels, Jumps und Choices.\n- Label: Setzt eine unsichtbare Markierung (z.B. 'ende_gut').\n- Jump: Springt sofort und unsichtbar zu einem bestimmten Label.\n- Choice: Stellt dem Spieler eine Frage und zeigt Buttons für Antworten. Jede Antwort hat ein 'Ziel-Label', zu dem gesprungen wird, sobald der Spieler sie anklickt."
+                },
+            ],
+        }
+    }
+}
 
 // --- ZUSTANDS-MASCHINE ---
 enum AppState {
     MainMenu,
-    Playing(VnPlayer),
-    Editing(VnEditor),
+    Playing(Box<VnPlayer>),
+    Editing(Box<VnEditor>),
+    SettingsMenu,
+    HelpMenu(HelpState),
 }
 
 struct VisualNovelApp {
     state: AppState,
-    show_exit_warning: bool, // Steuert, ob das Warn-Popup offen ist
-    skip_exit_warning: bool, // Merkt sich, ob der Haken gesetzt wurde
+    settings: Settings,
+    show_exit_warning: bool,
+    skip_exit_warning: bool,
 }
 
 impl VisualNovelApp {
     fn new() -> Self {
         Self {
             state: AppState::MainMenu,
+            settings: Settings::load(),
             show_exit_warning: false,
             skip_exit_warning: false,
         }
@@ -105,17 +152,29 @@ impl eframe::App for VisualNovelApp {
 
                 // 1. DAS HAUPTMENÜ
                 AppState::MainMenu => {
+                    let mut start_pressed = false;
+                    let mut editor_pressed = false;
+                    let mut settings_pressed = false;
+                    let mut help_pressed = false;
+                    
+                    if self.settings.keybindings.main_start.is_pressed(ui) { start_pressed = true; }
+                    if self.settings.keybindings.main_editor.is_pressed(ui) { editor_pressed = true; }
+                    if self.settings.keybindings.main_settings.is_pressed(ui) { settings_pressed = true; }
+                    if self.settings.keybindings.main_help.is_pressed(ui) { help_pressed = true; }
+
                     ui.centered_and_justified(|ui| {
                         ui.vertical_centered(|ui| {
+                            ui.add_space(60.0);
+                            ui.heading(egui::RichText::new("📖 Visual Novel Studio").size(48.0).color(egui::Color32::from_rgb(120, 190, 255)));
+                            ui.add_space(10.0);
+                            ui.label(egui::RichText::new("Erschaffe und erlebe interaktive Geschichten").size(24.0).italics().color(egui::Color32::GRAY));
+                            ui.add_space(60.0);
 
-                            ui.heading(egui::RichText::new("🚀 Visual Novel Studio").size(40.0).strong());
-                            ui.add_space(40.0);
-
-                            if ui.add_sized([300.0, 60.0], egui::Button::new(egui::RichText::new("▶ Spiel laden & starten").size(20.0))).clicked() {
+                            if ui.add_sized([300.0, 60.0], egui::Button::new(egui::RichText::new("▶ Spiel laden & starten").size(20.0))).clicked() || start_pressed {
                                 if let Some(path) = rfd::FileDialog::new().add_filter("JSON", &["json"]).pick_file() {
                                     if let Ok(json_string) = std::fs::read_to_string(&path) {
                                         if let Ok(chapter) = serde_json::from_str::<Chapter>(&json_string) {
-                                            self.state = AppState::Playing(VnPlayer::new(chapter));
+                                            self.state = AppState::Playing(Box::new(VnPlayer::new(chapter)));
                                         }
                                     }
                                 }
@@ -123,8 +182,20 @@ impl eframe::App for VisualNovelApp {
 
                             ui.add_space(20.0);
 
-                            if ui.add_sized([300.0, 60.0], egui::Button::new(egui::RichText::new("✏ Neuen Editor öffnen").size(20.0))).clicked() {
-                                self.state = AppState::Editing(VnEditor::new());
+                            if ui.add_sized([300.0, 60.0], egui::Button::new(egui::RichText::new("✏ Neuen Editor öffnen").size(20.0))).clicked() || editor_pressed {
+                                self.state = AppState::Editing(Box::new(VnEditor::new()));
+                            }
+
+                            ui.add_space(20.0);
+
+                            if ui.add_sized([300.0, 60.0], egui::Button::new(egui::RichText::new("⚙ Einstellungen").size(20.0))).clicked() || settings_pressed {
+                                self.state = AppState::SettingsMenu;
+                            }
+
+                            ui.add_space(20.0);
+
+                            if ui.add_sized([300.0, 60.0], egui::Button::new(egui::RichText::new("❓ Hilfe & Anleitung").size(20.0))).clicked() || help_pressed {
+                                self.state = AppState::HelpMenu(HelpState::new());
                             }
 
                         });
@@ -138,11 +209,127 @@ impl eframe::App for VisualNovelApp {
 
                 // 3. DER EDITOR (VnEditor)
                 AppState::Editing(editor) => {
-                    editor.ui(ui);
+                    editor.ui(ui, &self.settings);
+                }
+
+                AppState::SettingsMenu => {
+                    let mut return_to_main = false;
+                    
+                    if self.settings.keybindings.global_back.is_pressed(ui) { return_to_main = true; }
+                    
+                    egui::Window::new("Einstellungen")
+                        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                        .collapsible(false)
+                        .resizable(false)
+                        .show(ui.ctx(), |ui| {
+                            ui.vertical_centered(|ui| {
+                                self.settings.ui(ui);
+                                ui.add_space(20.0);
+                                if ui.button(egui::RichText::new("🔙 Zurück zum Hauptmenü").size(18.0)).clicked() {
+                                    return_to_main = true;
+                                }
+                            });
+                        });
+                    if return_to_main {
+                        self.state = AppState::MainMenu;
+                    }
+                }
+
+                // 5. HILFE MENU
+                AppState::HelpMenu(help) => {
+                    let mut return_to_main = false;
+                    
+                    if self.settings.keybindings.global_back.is_pressed(ui) { return_to_main = true; }
+                    
+                    ui.horizontal(|ui| {
+                        ui.heading("❓ Hilfe & Anleitung");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("🔙 Zurück zum Hauptmenü").clicked() {
+                                return_to_main = true;
+                            }
+                        });
+                    });
+                    ui.add_space(10.0);
+                    
+                    ui.horizontal(|ui| {
+                        ui.label("🔍 Suche:");
+                        ui.text_edit_singleline(&mut help.search_query);
+                    });
+                    
+                    ui.separator();
+
+                    let query = help.search_query.to_lowercase();
+                    
+                    // Finde passende Kapitel
+                    let filtered_chapters: Vec<(usize, &HelpChapter)> = help.chapters
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, c)| c.title.to_lowercase().contains(&query) || c.content.to_lowercase().contains(&query))
+                        .collect();
+
+                    egui::Panel::left("help_chapters").resizable(false).exact_size(250.0).show_inside(ui, |ui| {
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            if filtered_chapters.is_empty() {
+                                ui.label(egui::RichText::new("Keine Ergebnisse.").italics().color(egui::Color32::GRAY));
+                            }
+                            for (original_idx, chapter) in filtered_chapters {
+                                let is_selected = help.selected_chapter == original_idx;
+                                if ui.selectable_label(is_selected, chapter.title).clicked() {
+                                    help.selected_chapter = original_idx;
+                                }
+                            }
+                        });
+                    });
+
+                    egui::CentralPanel::default().show_inside(ui, |ui| {
+                        if help.selected_chapter < help.chapters.len() {
+                            let active_chapter = &help.chapters[help.selected_chapter];
+                            ui.heading(active_chapter.title);
+                            ui.add_space(15.0);
+                            egui::ScrollArea::vertical().show(ui, |ui| {
+                                ui.label(egui::RichText::new(active_chapter.content).size(16.0));
+                            });
+                        }
+                    });
+                    
+                    if return_to_main {
+                        self.state = AppState::MainMenu;
+                    }
                 }
             }
         });
     }
+}
+
+fn setup_custom_theme(ctx: &egui::Context) {
+    let mut style = (*ctx.global_style()).clone();
+    
+    style.spacing.item_spacing = egui::vec2(16.0, 16.0);
+    style.spacing.button_padding = egui::vec2(20.0, 12.0);
+    style.spacing.window_margin = egui::Margin::same(24);
+    
+    // Erhöhe alle Schriftgrößen um 15%
+    for (_text_style, font_id) in style.text_styles.iter_mut() {
+        font_id.size *= 1.15;
+    }
+    
+    let mut visuals = egui::Visuals::dark();
+    
+    // Edle Dunkel-Palette
+    visuals.window_fill = egui::Color32::from_rgb(30, 32, 40);
+    visuals.panel_fill = egui::Color32::from_rgb(22, 24, 30);
+    
+    visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(45, 48, 60);
+    visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(65, 130, 230);
+    visuals.widgets.active.bg_fill = egui::Color32::from_rgb(50, 100, 190);
+    
+    visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 65, 80));
+    visuals.widgets.hovered.bg_stroke = egui::Stroke::NONE;
+    
+    visuals.selection.bg_fill = egui::Color32::from_rgb(65, 130, 230);
+
+    ctx.set_global_style(style);
+    ctx.set_visuals(visuals);
 }
 
 fn main() -> eframe::Result<()> {
@@ -158,6 +345,7 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|cc| {
             egui_extras::install_image_loaders(&cc.egui_ctx);
+            setup_custom_theme(&cc.egui_ctx);
             Ok(Box::new(VisualNovelApp::new()))
         }),
     )
