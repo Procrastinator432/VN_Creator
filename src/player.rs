@@ -51,6 +51,12 @@ impl VnPlayer {
         let sfx_player = Player::connect_new(stream_handle.mixer());
 
         let mut preload_uris = Vec::new();
+        if let Some(theme) = &chapter.theme {
+            if let Some(frame_path) = &theme.character_frame_image {
+                let uri = format!("file://{}", frame_path);
+                if !preload_uris.contains(&uri) { preload_uris.push(uri); }
+            }
+        }
         for action in &chapter.actions {
             match action {
                 Action::SetBackground { image_path } => {
@@ -272,6 +278,7 @@ impl VnPlayer {
         ui: &mut egui::Ui,
         character: Option<&ActiveCharacter>,
         frame: egui::Frame,
+        frame_image: Option<&str>,
         width: f32,
         height: f32,
         fade: f32,
@@ -311,6 +318,18 @@ impl VnPlayer {
                     spinner_ui.centered_and_justified(|ui| { ui.spinner(); });
                 }
             });
+
+            if let Some(frame_path) = frame_image {
+                if !frame_path.trim().is_empty() {
+                    let frame_uri = format!("file://{}", frame_path);
+                    let tint = egui::Color32::from_white_alpha((fade * 255.0) as u8);
+                    let overlay = egui::Image::new(&frame_uri)
+                        .fit_to_exact_size(rect.size())
+                        .maintain_aspect_ratio(false)
+                        .tint(tint);
+                    col_ui.put(rect, overlay);
+                }
+            }
         }
     }
 }
@@ -464,12 +483,14 @@ impl VnPlayer {
         let mut frame_color = egui::Color32::from_white_alpha(150);
         let mut show_char_frames = false;
         let mut show_text_frame = false;
+        let mut char_frame_image = None;
 
         if let Some(theme) = &self.chapter.theme {
             if let Some(c) = theme.textbox_color { box_bg = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]); }
             if let Some(c) = theme.frame_color { frame_color = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]); }
             if let Some(scf) = theme.show_character_frames { show_char_frames = scf; }
             if let Some(stf) = theme.show_textbox_frame { show_text_frame = stf; }
+            if let Some(cfi) = &theme.character_frame_image { char_frame_image = Some(cfi.clone()); }
         }
 
         let mut text_ui = ui.new_child(egui::UiBuilder::new().max_rect(textbox_rect));
@@ -485,7 +506,11 @@ impl VnPlayer {
                 let portrait_width = textbox_height * 0.8;
                 let text_width = (textbox_rect.width() - (portrait_width * 2.0)).max(100.0);
 
-                let portrait_frame = if show_char_frames {
+                let portrait_frame = if char_frame_image.is_some() {
+                    egui::Frame::default()
+                        .fill(egui::Color32::from_black_alpha(80))
+                        .inner_margin(8.0)
+                } else if show_char_frames {
                     egui::Frame::default()
                         .fill(egui::Color32::from_black_alpha(100))
                         .stroke(egui::Stroke::new(3.0, frame_color))
@@ -496,7 +521,15 @@ impl VnPlayer {
                 };
 
                 ui.horizontal(|ui| {
-                    self.draw_portrait_column(ui, active_char, portrait_frame.clone(), portrait_width, textbox_height, self.char_fade);
+                    self.draw_portrait_column(
+                        ui,
+                        active_char,
+                        portrait_frame.clone(),
+                        char_frame_image.as_deref(),
+                        portrait_width,
+                        textbox_height,
+                        self.char_fade,
+                    );
 
                     let (mid_rect, _) = ui.allocate_exact_size(egui::vec2(text_width, textbox_height), egui::Sense::hover());
                     let mut mid_ui = ui.new_child(egui::UiBuilder::new().max_rect(mid_rect));
@@ -541,7 +574,15 @@ impl VnPlayer {
                         });
                     });
 
-                    self.draw_portrait_column(ui, inactive_char, portrait_frame, portrait_width, textbox_height, self.char_fade);
+                    self.draw_portrait_column(
+                        ui,
+                        inactive_char,
+                        portrait_frame,
+                        char_frame_image.as_deref(),
+                        portrait_width,
+                        textbox_height,
+                        self.char_fade,
+                    );
                 });
             });
 

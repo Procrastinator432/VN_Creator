@@ -32,6 +32,13 @@ impl VnEditor {
         }
     }
 
+    pub fn with_chapter(chapter: Chapter) -> Self {
+        let mut editor = Self::new();
+        editor.collapsed_states = vec![false; chapter.actions.len()];
+        editor.chapter = chapter;
+        editor
+    }
+
     fn color_edit(ui: &mut egui::Ui, label: &str, color_opt: &mut Option<[u8; 4]>) {
         ui.horizontal(|ui| {
             ui.label(label);
@@ -65,7 +72,7 @@ impl VnEditor {
         }
 
         if default_folder.contains("pictures") {
-            dialog = dialog.add_filter("Bilder", &["png", "jpg", "jpeg", "webp"]);
+            dialog = dialog.add_filter("Bilder", &["png", "jpg", "jpeg", "webp", "gif", "bmp", "ico", "tiff", "tga"]);
         } else if default_folder.contains("audio") {
             dialog = dialog.add_filter("Audio", &["mp3", "wav", "ogg"]);
         }
@@ -100,6 +107,37 @@ impl VnEditor {
             ui.horizontal(|ui| {
                 ui.set_min_height(dynamic_height);
                 ui.add(egui::Image::new(&format!("file://{}", path_string))
+                    .max_height(dynamic_height)
+                    .corner_radius(4.0)
+                );
+            });
+        }
+    }
+
+    fn optional_path_edit_with_browser(ui: &mut egui::Ui, label: &str, value: &mut Option<String>, default_folder: &str) {
+        let mut current_text = value.clone().unwrap_or_default();
+        ui.horizontal(|ui| {
+            ui.label(label);
+            ui.text_edit_singleline(&mut current_text);
+            if ui.button("📂 Wahl").clicked() {
+                if let Some(new_path) = Self::pick_asset_path(default_folder) {
+                    current_text = new_path;
+                }
+            }
+            if value.is_some() && ui.button("🗑 Reset").clicked() {
+                current_text.clear();
+            }
+        });
+        *value = if current_text.trim().is_empty() { None } else { Some(current_text.clone()) };
+
+        if default_folder.contains("pictures") && !current_text.trim().is_empty() {
+            ui.add_space(5.0);
+            let screen_height = ui.ctx().content_rect().height();
+            let dynamic_height = (screen_height * 0.12).clamp(50.0, 180.0);
+
+            ui.horizontal(|ui| {
+                ui.set_min_height(dynamic_height);
+                ui.add(egui::Image::new(&format!("file://{}", current_text))
                     .max_height(dynamic_height)
                     .corner_radius(4.0)
                 );
@@ -262,6 +300,9 @@ impl VnEditor {
                                 Action::PlaySound { audio_path } => Self::process_asset_path(audio_path, "assets/audio/sfx"),
                             }
                         }
+                        if let Some(theme) = &mut chapter.theme {
+                            Self::process_optional_asset_path(&mut theme.character_frame_image, "assets/pictures/frames");
+                        }
                         if let Ok(json_str) = serde_json::to_string_pretty(&chapter) {
                             let _ = std::fs::write(&path, json_str);
                         }
@@ -297,7 +338,13 @@ impl VnEditor {
                 let mut delete_theme = false;
                 if chapter.theme.is_none() {
                     if ui.button("✨ Eigenes Theme erstellen").clicked() {
-                        chapter.theme = Some(Theme { textbox_color: None, frame_color: None, show_character_frames: None, show_textbox_frame: None });
+                        chapter.theme = Some(Theme {
+                            textbox_color: None,
+                            frame_color: None,
+                            show_character_frames: None,
+                            show_textbox_frame: None,
+                            character_frame_image: None,
+                        });
                     }
                 } else {
                     if let Some(theme) = &mut chapter.theme {
@@ -306,9 +353,12 @@ impl VnEditor {
                             Self::color_edit(ui, "Rahmen Farbe:", &mut theme.frame_color);
                             ui.separator();
                             let mut show_char = theme.show_character_frames.unwrap_or(false);
-                            if ui.checkbox(&mut show_char, "Charakter-Rahmen anzeigen").changed() { theme.show_character_frames = Some(show_char); }
+                            if ui.checkbox(&mut show_char, "Charakter-Rahmen anzeigen (Farbe)").changed() { theme.show_character_frames = Some(show_char); }
                             let mut show_box = theme.show_textbox_frame.unwrap_or(false);
                             if ui.checkbox(&mut show_box, "Textbox-Rahmen anzeigen").changed() { theme.show_textbox_frame = Some(show_box); }
+                            ui.separator();
+                            Self::optional_path_edit_with_browser(ui, "Charakter-Rahmen (Bild):", &mut theme.character_frame_image, "assets/pictures/frames");
+                            ui.separator();
                             if ui.button("🗑 Theme löschen (Standard nutzen)").clicked() { delete_theme = true; }
                         });
                     }

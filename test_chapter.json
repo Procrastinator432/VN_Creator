@@ -1,0 +1,49 @@
+{
+  "title": "Kapitel 1: Das Treffen",
+  "theme": {
+    "textbox_color": [0, 0, 50, 220],
+    "frame_color": [100, 200, 255, 255],
+    "show_character_frames": true,
+    "show_textbox_frame": false
+  },
+  "actions": [
+    {
+      "SetBackground": {
+        "image_path": "assets/test/backgrounds/school_gate.png"
+      }
+    },
+    {
+      "Dialogue": {
+        "speaker_name": null,
+        "text": "Es war ein sonniger Morgen. Der Wind wehte sanft durch die Blätter.",
+        "audio_path": null
+      }
+    },
+    {
+      "ShowCharacter": {
+        "character_id": "alice",
+        "image_path": "assets/test/characters/alice_happy.png"
+      }
+    },
+    {
+      "Dialogue": {
+        "speaker_name": "Alice",
+        "text": "Hey! Schön, dass du da bist!",
+        "audio_path": "assets/test/audio/voice/alice_hello.ogg"
+      }
+    },
+    {
+      "ShowCharacter": {
+        "character_id": "bob",
+        "image_path": "assets/test/characters/bob_neutral.png"
+      }
+    },
+    {
+      "Dialogue": {
+        "speaker_name": "Bob",
+        "text": "Morgen. Habe ich was verpasst?",
+        "audio_path": null
+      }
+    }
+  ]
+}

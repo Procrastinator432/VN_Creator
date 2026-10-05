@@ -1,5 +1,7 @@
 /target
 /Cargo.lock
+/cargo/
+settings.json
 **/*.rs.bk
 *.json.bk
 .idea/

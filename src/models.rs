@@ -1,21 +1,23 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Chapter {
     pub title: String,
     pub theme: Option<Theme>,
     pub actions: Vec<Action>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Theme {
     pub textbox_color: Option<[u8; 4]>,
     pub frame_color: Option<[u8; 4]>,
     pub show_character_frames: Option<bool>,
     pub show_textbox_frame: Option<bool>,
+    #[serde(default)]
+    pub character_frame_image: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum Action {
     SetBackground { image_path: String },
     ShowCharacter { character_id: String, image_path: String },
@@ -28,19 +30,19 @@ pub enum Action {
     Choice { question: String, options: Vec<ChoiceOption> },
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ChoiceOption {
     pub text: String,
     pub target_label: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ActiveCharacter {
     pub id: String,
     pub image_path: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct SaveState {
     pub chapter: Chapter,
     pub current_index: usize,

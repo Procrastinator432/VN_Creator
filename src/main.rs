@@ -2,6 +2,7 @@ mod models;
 mod settings;
 mod player;
 mod editor;
+pub mod mcp;
 
 use player::VnPlayer;
 use editor::VnEditor;
@@ -65,9 +66,9 @@ struct VisualNovelApp {
 }
 
 impl VisualNovelApp {
-    fn new() -> Self {
+    fn new(initial_state: AppState) -> Self {
         Self {
-            state: AppState::MainMenu,
+            state: initial_state,
             settings: Settings::load(),
             show_exit_warning: false,
             skip_exit_warning: false,
@@ -332,7 +333,81 @@ fn setup_custom_theme(ctx: &egui::Context) {
     ctx.set_visuals(visuals);
 }
 
-fn main() -> eframe::Result<()> {
+fn print_cli_help() {
+    println!("VN Creator - Visual Novel Studio & Player (v1.1.0)");
+    println!("\nVerwendung:");
+    println!("  VN_Creator                   Startet die GUI im Hauptmenü");
+    println!("  VN_Creator --mcp             Startet den Model Context Protocol (MCP) Server über stdio");
+    println!("  VN_Creator --player <pfad>   Startet den Player direkt mit der angegebenen Kapitel-JSON");
+    println!("  VN_Creator <pfad.json>       Startet den Player direkt mit der angegebenen Datei");
+    println!("  VN_Creator --editor [pfad]   Startet den Editor direkt (optional mit geladenem Kapitel)");
+    println!("  VN_Creator --help, -h        Zeigt diese Hilfe an");
+}
+
+fn parse_cli_state(args: &[String]) -> AppState {
+    if args.len() <= 1 {
+        return AppState::MainMenu;
+    }
+
+    let mut i = 1;
+    while i < args.len() {
+        let arg = &args[i];
+        if arg == "--player" && i + 1 < args.len() {
+            let path = &args[i + 1];
+            match std::fs::read_to_string(path) {
+                Ok(content) => match serde_json::from_str::<Chapter>(&content) {
+                    Ok(chapter) => return AppState::Playing(Box::new(VnPlayer::new(chapter))),
+                    Err(e) => eprintln!("Fehler beim Parsen von '{}': {}", path, e),
+                },
+                Err(e) => eprintln!("Fehler beim Öffnen von '{}': {}", path, e),
+            }
+            i += 2;
+            continue;
+        } else if arg == "--editor" {
+            if i + 1 < args.len() && !args[i + 1].starts_with("--") {
+                let path = &args[i + 1];
+                match std::fs::read_to_string(path) {
+                    Ok(content) => match serde_json::from_str::<Chapter>(&content) {
+                        Ok(chapter) => return AppState::Editing(Box::new(VnEditor::with_chapter(chapter))),
+                        Err(e) => eprintln!("Fehler beim Parsen von '{}': {}", path, e),
+                    },
+                    Err(e) => eprintln!("Fehler beim Öffnen von '{}': {}", path, e),
+                }
+                i += 2;
+                continue;
+            } else {
+                return AppState::Editing(Box::new(VnEditor::new()));
+            }
+        } else if arg.ends_with(".json") && !arg.starts_with("--") {
+            match std::fs::read_to_string(arg) {
+                Ok(content) => match serde_json::from_str::<Chapter>(&content) {
+                    Ok(chapter) => return AppState::Playing(Box::new(VnPlayer::new(chapter))),
+                    Err(e) => eprintln!("Fehler beim Parsen von '{}': {}", arg, e),
+                },
+                Err(e) => eprintln!("Fehler beim Öffnen von '{}': {}", arg, e),
+            }
+        }
+        i += 1;
+    }
+
+    AppState::MainMenu
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = std::env::args().collect();
+
+    if args.iter().any(|a| a == "--mcp") {
+        mcp::run_mcp_server()?;
+        return Ok(());
+    }
+
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        print_cli_help();
+        return Ok(());
+    }
+
+    let initial_state = parse_cli_state(&args);
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1200.0, 800.0])
@@ -343,10 +418,12 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "Visual Novel Studio",
         options,
-        Box::new(|cc| {
+        Box::new(move |cc| {
             egui_extras::install_image_loaders(&cc.egui_ctx);
             setup_custom_theme(&cc.egui_ctx);
-            Ok(Box::new(VisualNovelApp::new()))
+            Ok(Box::new(VisualNovelApp::new(initial_state)))
         }),
-    )
+    )?;
+
+    Ok(())
 }
