@@ -34,7 +34,7 @@ impl HelpState {
                 },
                 HelpChapter {
                     title: "2. Editor: Kapitel erstellen",
-                    content: "Mit 'Neuen Editor öffnen' kannst du eigene Geschichten schreiben.\nDu kannst oben einen Titel festlegen und unter 'Kapitel-Design' die Farben für die Textboxen anpassen.\nFüge über die Buttons Aktionen (wie Dialoge oder Bilder) zu deiner Zeitleiste hinzu. Mit Drag & Drop (oder den ⬆/⬇ Pfeilen) kannst du Aktionen sortieren. Vergiss nicht, regelmäßig oben links zu speichern!"
+                    content: "Mit 'Neuen Editor öffnen' kannst du eigene Geschichten schreiben.\nDu kannst oben einen Titel festlegen und unter 'Kapitel-Design' die Farben für die Textboxen anpassen.\nFüge über die Buttons Aktionen (wie Dialoge oder Bilder) zu deiner Zeitleiste hinzu. Über die ⬆/⬇ Pfeile (oder Tastenkürzel Strg+Pfeiltasten) kannst du Aktionen sortieren. Vergiss nicht, regelmäßig oben links zu speichern!"
                 },
                 HelpChapter {
                     title: "3. Medien (Bilder & Audio)",
@@ -63,6 +63,7 @@ struct VisualNovelApp {
     settings: Settings,
     show_exit_warning: bool,
     skip_exit_warning: bool,
+    error_message: Option<String>,
 }
 
 impl VisualNovelApp {
@@ -72,6 +73,7 @@ impl VisualNovelApp {
             settings: Settings::load(),
             show_exit_warning: false,
             skip_exit_warning: false,
+            error_message: None,
         }
     }
 }
@@ -145,6 +147,27 @@ impl eframe::App for VisualNovelApp {
             self.show_exit_warning = false; // Zur Sicherheit das Popup schließen
         }
 
+        // --- DAS FEHLER-POPUP ---
+        if let Some(err) = &self.error_message {
+            let mut close = false;
+            egui::Window::new("❌ Fehler beim Laden")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ui.ctx(), |ui| {
+                    ui.label(egui::RichText::new(err).color(egui::Color32::LIGHT_RED));
+                    ui.add_space(15.0);
+                    ui.vertical_centered(|ui| {
+                        if ui.button("OK").clicked() {
+                            close = true;
+                        }
+                    });
+                });
+            if close {
+                self.error_message = None;
+            }
+        }
+
         // --- HAUPTBEREICH ANZEIGEN ---
         // FIX 3: Auch hier 'show_inside(ui, ...)'!
         egui::CentralPanel::default().show_inside(ui, |ui| {
@@ -171,15 +194,22 @@ impl eframe::App for VisualNovelApp {
                             ui.label(egui::RichText::new("Erschaffe und erlebe interaktive Geschichten").size(24.0).italics().color(egui::Color32::GRAY));
                             ui.add_space(60.0);
 
-                            if ui.add_sized([300.0, 60.0], egui::Button::new(egui::RichText::new("▶ Spiel laden & starten").size(20.0))).clicked() || start_pressed {
-                                if let Some(path) = rfd::FileDialog::new().add_filter("JSON", &["json"]).pick_file() {
-                                    if let Ok(json_string) = std::fs::read_to_string(&path) {
-                                        if let Ok(chapter) = serde_json::from_str::<Chapter>(&json_string) {
-                                            self.state = AppState::Playing(Box::new(VnPlayer::new(chapter)));
+                            if (ui.add_sized([300.0, 60.0], egui::Button::new(egui::RichText::new("▶ Spiel laden & starten").size(20.0))).clicked() || start_pressed)
+                                && let Some(path) = rfd::FileDialog::new().add_filter("JSON", &["json"]).pick_file() {
+                                    match std::fs::read_to_string(&path) {
+                                        Ok(json_string) => match serde_json::from_str::<Chapter>(&json_string) {
+                                            Ok(chapter) => {
+                                                self.state = AppState::Playing(Box::new(VnPlayer::new(chapter)));
+                                            }
+                                            Err(err) => {
+                                                self.error_message = Some(format!("Fehler beim Parsen der Datei '{}':\n\n{}", path.display(), err));
+                                            }
+                                        },
+                                        Err(err) => {
+                                            self.error_message = Some(format!("Konnte Datei '{}' nicht öffnen:\n\n{}", path.display(), err));
                                         }
                                     }
                                 }
-                            }
 
                             ui.add_space(20.0);
 

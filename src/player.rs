@@ -28,10 +28,10 @@ pub struct VnPlayer {
     
     waiting_for_choice: Option<(String, Vec<ChoiceOption>)>,
 
-    _audio_stream: MixerDeviceSink,
-    audio_player: Player,
-    bgm_player: Player,
-    sfx_player: Player,
+    _audio_stream: Option<MixerDeviceSink>,
+    audio_player: Option<Player>,
+    bgm_player: Option<Player>,
+    sfx_player: Option<Player>,
     
     current_bgm: Option<String>,
     pub settings: Settings,
@@ -43,20 +43,18 @@ pub struct VnPlayer {
 
 impl VnPlayer {
     pub fn new(chapter: Chapter) -> Self {
-        let stream_handle = DeviceSinkBuilder::open_default_sink()
-            .expect("Konnte kein Audio-Gerät finden!");
+        let stream_handle = DeviceSinkBuilder::open_default_sink().ok();
 
-        let voice_player = Player::connect_new(stream_handle.mixer());
-        let bgm_player = Player::connect_new(stream_handle.mixer());
-        let sfx_player = Player::connect_new(stream_handle.mixer());
+        let voice_player = stream_handle.as_ref().map(|s| Player::connect_new(s.mixer()));
+        let bgm_player = stream_handle.as_ref().map(|s| Player::connect_new(s.mixer()));
+        let sfx_player = stream_handle.as_ref().map(|s| Player::connect_new(s.mixer()));
 
         let mut preload_uris = Vec::new();
-        if let Some(theme) = &chapter.theme {
-            if let Some(frame_path) = &theme.character_frame_image {
+        if let Some(theme) = &chapter.theme
+            && let Some(frame_path) = &theme.character_frame_image {
                 let uri = format!("file://{}", frame_path);
                 if !preload_uris.contains(&uri) { preload_uris.push(uri); }
             }
-        }
         for action in &chapter.actions {
             match action {
                 Action::SetBackground { image_path } => {
@@ -114,13 +112,12 @@ impl VnPlayer {
         player.history = save.history;
         player.current_bgm = save.current_bgm.clone();
         
-        if let Some(bgm) = &player.current_bgm {
-            if let Ok(file) = std::fs::File::open(bgm) {
-                if let Ok(source) = Decoder::try_from(file) {
-                    player.bgm_player.append(source.repeat_infinite());
-                }
+        if let Some(bgm) = &player.current_bgm
+            && let Some(bgm_player) = &player.bgm_player
+            && let Ok(file) = std::fs::File::open(bgm)
+            && let Ok(source) = Decoder::try_from(file) {
+                bgm_player.append(source.repeat_infinite());
             }
-        }
         
         player.is_loading = true;
         player
@@ -142,9 +139,15 @@ impl VnPlayer {
 
     fn apply_volumes(&self) {
         let master = self.settings.volume_master;
-        self.bgm_player.set_volume(self.settings.volume_bgm * master);
-        self.sfx_player.set_volume(self.settings.volume_sfx * master);
-        self.audio_player.set_volume(self.settings.volume_voice * master);
+        if let Some(bgm) = &self.bgm_player {
+            bgm.set_volume(self.settings.volume_bgm * master);
+        }
+        if let Some(sfx) = &self.sfx_player {
+            sfx.set_volume(self.settings.volume_sfx * master);
+        }
+        if let Some(audio) = &self.audio_player {
+            audio.set_volume(self.settings.volume_voice * master);
+        }
     }
 
     fn process_actions_until_dialogue(&mut self) {
@@ -176,29 +179,32 @@ impl VnPlayer {
                     self.current_index += 1;
                 }
                 Action::PlayMusic { audio_path } => {
-                    self.bgm_player = Player::connect_new(self._audio_stream.mixer());
-                    self.apply_volumes();
-                    if !audio_path.trim().is_empty() {
-                        self.current_bgm = Some(audio_path.clone());
-                        if let Ok(file) = std::fs::File::open(audio_path) {
-                            if let Ok(source) = Decoder::try_from(file) {
-                                self.bgm_player.append(source.repeat_infinite());
-                            }
+                    if let Some(sink) = &self._audio_stream {
+                        self.bgm_player = Some(Player::connect_new(sink.mixer()));
+                        self.apply_volumes();
+                        if !audio_path.trim().is_empty() {
+                            self.current_bgm = Some(audio_path.clone());
+                            if let Ok(file) = std::fs::File::open(audio_path)
+                                && let Ok(source) = Decoder::try_from(file)
+                                && let Some(bgm) = &self.bgm_player {
+                                    bgm.append(source.repeat_infinite());
+                                }
+                        } else {
+                            self.current_bgm = None;
                         }
-                    } else {
-                        self.current_bgm = None;
                     }
                     self.current_index += 1;
                 }
                 Action::PlaySound { audio_path } => {
-                    self.sfx_player = Player::connect_new(self._audio_stream.mixer());
-                    self.apply_volumes();
-                    if !audio_path.trim().is_empty() {
-                        if let Ok(file) = std::fs::File::open(audio_path) {
-                            if let Ok(source) = Decoder::try_from(file) {
-                                self.sfx_player.append(source);
+                    if let Some(sink) = &self._audio_stream {
+                        self.sfx_player = Some(Player::connect_new(sink.mixer()));
+                        self.apply_volumes();
+                        if !audio_path.trim().is_empty()
+                            && let Ok(file) = std::fs::File::open(audio_path)
+                            && let Ok(source) = Decoder::try_from(file)
+                            && let Some(sfx) = &self.sfx_player {
+                                sfx.append(source);
                             }
-                        }
                     }
                     self.current_index += 1;
                 }
@@ -208,13 +214,12 @@ impl VnPlayer {
                 Action::Jump { target_label } => {
                     let mut found = false;
                     for (i, act) in self.chapter.actions.iter().enumerate() {
-                        if let Action::Label { name } = act {
-                            if name == target_label {
+                        if let Action::Label { name } = act
+                            && name == target_label {
                                 self.current_index = i;
                                 found = true;
                                 break;
                             }
-                        }
                     }
                     if !found { self.current_index += 1; }
                 }
@@ -235,25 +240,25 @@ impl VnPlayer {
                     self.text_target_duration = text.len() as f32 * 0.035;
 
                     if let Some(path) = audio_path {
-                        if let Ok(file) = std::fs::File::open(path) {
-                            self.audio_player = Player::connect_new(self._audio_stream.mixer());
-                            self.apply_volumes();
-                            
-                            if let Ok(file_for_dur) = std::fs::File::open(path) {
-                                if let Ok(src) = Decoder::try_from(file_for_dur) {
-                                    if let Some(duration) = src.total_duration() {
-                                        let dur_secs = duration.as_secs_f32();
-                                        if dur_secs >= 10.0 {
-                                            self.text_target_duration = (dur_secs - 1.5_f32).max(0.1_f32);
-                                        } else {
-                                            self.text_target_duration = (dur_secs * 0.85_f32).max(0.1_f32);
-                                        }
-                                    }
+                        if let Ok(file_for_dur) = std::fs::File::open(path)
+                            && let Ok(src) = Decoder::try_from(file_for_dur)
+                            && let Some(duration) = src.total_duration() {
+                                let dur_secs = duration.as_secs_f32();
+                                if dur_secs >= 10.0 {
+                                    self.text_target_duration = (dur_secs - 1.5_f32).max(0.1_f32);
+                                } else {
+                                    self.text_target_duration = (dur_secs * 0.85_f32).max(0.1_f32);
                                 }
                             }
-                            if let Ok(source) = Decoder::try_from(file) {
-                                self.audio_player.append(source);
-                            }
+
+                        if let Some(sink) = &self._audio_stream {
+                            self.audio_player = Some(Player::connect_new(sink.mixer()));
+                            self.apply_volumes();
+                            if let Ok(file) = std::fs::File::open(path)
+                                && let Ok(source) = Decoder::try_from(file)
+                                && let Some(voice) = &self.audio_player {
+                                    voice.append(source);
+                                }
                         }
                     }
 
@@ -279,11 +284,10 @@ impl VnPlayer {
         character: Option<&ActiveCharacter>,
         frame: egui::Frame,
         frame_image: Option<&str>,
-        width: f32,
-        height: f32,
+        size: egui::Vec2,
         fade: f32,
     ) {
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+        let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
         let mut col_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect));
         col_ui.set_clip_rect(rect);
 
@@ -319,8 +323,8 @@ impl VnPlayer {
                 }
             });
 
-            if let Some(frame_path) = frame_image {
-                if !frame_path.trim().is_empty() {
+            if let Some(frame_path) = frame_image
+                && !frame_path.trim().is_empty() {
                     let frame_uri = format!("file://{}", frame_path);
                     let tint = egui::Color32::from_white_alpha((fade * 255.0) as u8);
                     let overlay = egui::Image::new(&frame_uri)
@@ -329,15 +333,12 @@ impl VnPlayer {
                         .tint(tint);
                     col_ui.put(rect, overlay);
                 }
-            }
         }
     }
 }
 
 impl VnPlayer {
     pub fn ui(&mut self, ui: &mut egui::Ui) {
-        let binds = self.settings.keybindings.clone();
-        
         if self.is_in_menu {
             egui::Window::new("Pausenmenü")
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -348,32 +349,28 @@ impl VnPlayer {
                         self.settings.ui(ui);
                         
                         ui.add_space(20.0);
-                        if ui.button(egui::RichText::new("💾 Spielstand speichern").size(18.0)).clicked() {
-                            if let Some(path) = rfd::FileDialog::new().add_filter("Save", &["json"]).set_file_name("save.json").save_file() {
+                        if ui.button(egui::RichText::new("💾 Spielstand speichern").size(18.0)).clicked()
+                            && let Some(path) = rfd::FileDialog::new().add_filter("Save", &["json"]).set_file_name("save.json").save_file() {
                                 let save = self.export_save();
                                 if let Ok(json_str) = serde_json::to_string_pretty(&save) {
                                     let _ = std::fs::write(path, json_str);
                                 }
                             }
-                        }
-                        if ui.button(egui::RichText::new("📂 Spielstand laden").size(18.0)).clicked() {
-                            if let Some(path) = rfd::FileDialog::new().add_filter("Save", &["json"]).pick_file() {
-                                if let Ok(s) = std::fs::read_to_string(path) {
-                                    if let Ok(save) = serde_json::from_str::<SaveState>(&s) {
+                        if ui.button(egui::RichText::new("📂 Spielstand laden").size(18.0)).clicked()
+                            && let Some(path) = rfd::FileDialog::new().add_filter("Save", &["json"]).pick_file()
+                                && let Ok(s) = std::fs::read_to_string(path)
+                                    && let Ok(save) = serde_json::from_str::<SaveState>(&s) {
                                         *self = VnPlayer::from_save(save);
                                     }
-                                }
-                            }
-                        }
                         ui.add_space(20.0);
-                        if ui.button(egui::RichText::new("▶ Weiterlesen").size(20.0)).clicked() || binds.global_menu.is_pressed(ui) {
+                        if ui.button(egui::RichText::new("▶ Weiterlesen").size(20.0)).clicked() || self.settings.keybindings.global_menu.is_pressed(ui) {
                             self.is_in_menu = false;
                         }
                     });
                 });
-            
-            ui.ctx().request_repaint();
         }
+
+        let binds = &self.settings.keybindings;
 
         if self.is_loading {
             let mut loaded_count = 0;
@@ -448,13 +445,13 @@ impl VnPlayer {
         let menu_rect = egui::Rect::from_min_size(full_rect.min + egui::vec2(full_rect.width() - 160.0, 20.0), egui::vec2(140.0, 45.0));
         if ui.put(menu_rect, egui::Button::new(egui::RichText::new("⚙ Menü").size(18.0))).clicked() || (!self.is_in_menu && binds.global_menu.is_pressed(ui)) {
             self.is_in_menu = true;
-            self.bgm_player.pause();
-            self.sfx_player.pause();
-            self.audio_player.pause();
+            if let Some(bgm) = &self.bgm_player { bgm.pause(); }
+            if let Some(sfx) = &self.sfx_player { sfx.pause(); }
+            if let Some(voice) = &self.audio_player { voice.pause(); }
         } else if !self.is_in_menu {
-            self.bgm_player.play();
-            self.sfx_player.play();
-            self.audio_player.play();
+            if let Some(bgm) = &self.bgm_player { bgm.play(); }
+            if let Some(sfx) = &self.sfx_player { sfx.play(); }
+            if let Some(voice) = &self.audio_player { voice.play(); }
         }
 
         let textbox_height = (full_rect.height() * 0.30).max(180.0);
@@ -524,10 +521,9 @@ impl VnPlayer {
                     self.draw_portrait_column(
                         ui,
                         active_char,
-                        portrait_frame.clone(),
+                        portrait_frame,
                         char_frame_image.as_deref(),
-                        portrait_width,
-                        textbox_height,
+                        egui::vec2(portrait_width, textbox_height),
                         self.char_fade,
                     );
 
@@ -564,10 +560,8 @@ impl VnPlayer {
                                         if ui.button("⏭ Überspringen").clicked() || skip_pressed {
                                             skip_text = true;
                                         }
-                                    } else {
-                                        if ui.button("Weiter ➡").clicked() || advance_pressed {
-                                            advance_chapter = true;
-                                        }
+                                    } else if ui.button("Weiter ➡").clicked() || advance_pressed {
+                                        advance_chapter = true;
                                     }
                                 }
                             });
@@ -579,8 +573,7 @@ impl VnPlayer {
                         inactive_char,
                         portrait_frame,
                         char_frame_image.as_deref(),
-                        portrait_width,
-                        textbox_height,
+                        egui::vec2(portrait_width, textbox_height),
                         self.char_fade,
                     );
                 });
@@ -616,13 +609,12 @@ impl VnPlayer {
                 self.waiting_for_choice = None;
                 let mut found = false;
                 for (i, act) in self.chapter.actions.iter().enumerate() {
-                    if let Action::Label { name } = act {
-                        if name == &label {
+                    if let Action::Label { name } = act
+                        && name == &label {
                             self.current_index = i;
                             found = true;
                             break;
                         }
-                    }
                 }
                 if !found { self.current_index += 1; }
                 self.process_actions_until_dialogue();
@@ -655,7 +647,13 @@ impl VnPlayer {
                 });
         }
 
-        ui.ctx().request_repaint();
+        let is_animating = self.bg_fade < 1.0
+            || self.char_fade < 1.0
+            || (self.text_target_duration > 0.0 && self.text_elapsed_time < self.text_target_duration);
+
+        if is_animating {
+            ui.ctx().request_repaint();
+        }
 
         if advance_chapter && !self.is_in_menu && self.waiting_for_choice.is_none() {
             self.next_action();

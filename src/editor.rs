@@ -9,23 +9,31 @@ pub struct VnEditor {
     pub chapter: Chapter,
     pub collapsed_states: Vec<bool>,
     pub selected_action: Option<usize>,
-    _audio_stream: MixerDeviceSink,
-    audio_player: Player,
+    pub error_message: Option<String>,
+    _audio_stream: Option<MixerDeviceSink>,
+    audio_player: Option<Player>,
     audio_durations: HashMap<String, String>,
+}
+
+struct AudioEditorCtx<'a> {
+    stream: Option<&'a MixerDeviceSink>,
+    player: &'a mut Option<Player>,
+    durations: &'a mut HashMap<String, String>,
 }
 
 impl VnEditor {
     pub fn new() -> Self {
-        let stream_handle = DeviceSinkBuilder::open_default_sink().expect("Kein Audio-Gerät!");
-        let player = Player::connect_new(stream_handle.mixer());
+        let stream_handle = DeviceSinkBuilder::open_default_sink().ok();
+        let player = stream_handle.as_ref().map(|s| Player::connect_new(s.mixer()));
         Self {
             chapter: Chapter {
                 title: String::new(),
                 theme: None,
-                actions: vec![]
+                actions: vec![],
             },
             collapsed_states: vec![],
             selected_action: None,
+            error_message: None,
             _audio_stream: stream_handle,
             audio_player: player,
             audio_durations: HashMap::new(),
@@ -92,11 +100,10 @@ impl VnEditor {
         ui.horizontal(|ui| {
             ui.label(label);
             ui.text_edit_singleline(path_string);
-            if ui.button("📂 Wahl").clicked() {
-                if let Some(new_path) = Self::pick_asset_path(default_folder) {
+            if ui.button("📂 Wahl").clicked()
+                && let Some(new_path) = Self::pick_asset_path(default_folder) {
                     *path_string = new_path;
                 }
-            }
         });
 
         if default_folder.contains("pictures") && !path_string.trim().is_empty() {
@@ -106,7 +113,7 @@ impl VnEditor {
 
             ui.horizontal(|ui| {
                 ui.set_min_height(dynamic_height);
-                ui.add(egui::Image::new(&format!("file://{}", path_string))
+                ui.add(egui::Image::new(format!("file://{}", path_string))
                     .max_height(dynamic_height)
                     .corner_radius(4.0)
                 );
@@ -119,11 +126,10 @@ impl VnEditor {
         ui.horizontal(|ui| {
             ui.label(label);
             ui.text_edit_singleline(&mut current_text);
-            if ui.button("📂 Wahl").clicked() {
-                if let Some(new_path) = Self::pick_asset_path(default_folder) {
+            if ui.button("📂 Wahl").clicked()
+                && let Some(new_path) = Self::pick_asset_path(default_folder) {
                     current_text = new_path;
                 }
-            }
             if value.is_some() && ui.button("🗑 Reset").clicked() {
                 current_text.clear();
             }
@@ -137,7 +143,7 @@ impl VnEditor {
 
             ui.horizontal(|ui| {
                 ui.set_min_height(dynamic_height);
-                ui.add(egui::Image::new(&format!("file://{}", current_text))
+                ui.add(egui::Image::new(format!("file://{}", current_text))
                     .max_height(dynamic_height)
                     .corner_radius(4.0)
                 );
@@ -145,44 +151,55 @@ impl VnEditor {
         }
     }
 
-    fn audio_path_edit_with_browser(ui: &mut egui::Ui, label: &str, path_string: &mut String, default_folder: &str, stream: &MixerDeviceSink, player: &mut Player, durations: &mut HashMap<String, String>) {
+    fn audio_path_edit_with_browser(
+        ui: &mut egui::Ui,
+        label: &str,
+        path_string: &mut String,
+        default_folder: &str,
+        ctx: &mut AudioEditorCtx,
+    ) {
         ui.horizontal(|ui| {
             ui.label(label);
             ui.text_edit_singleline(path_string);
-            if ui.button("📂 Wahl").clicked() {
-                if let Some(new_path) = Self::pick_asset_path(default_folder) {
+            if ui.button("📂 Wahl").clicked()
+                && let Some(new_path) = Self::pick_asset_path(default_folder) {
                     *path_string = new_path;
                 }
-            }
 
             if !path_string.trim().is_empty() {
-                if ui.button("▶").clicked() {
-                    if let Ok(file) = std::fs::File::open(&*path_string) {
+                if ui.button("▶").clicked()
+                    && let (Some(stream), Some(player)) = (ctx.stream, &mut ctx.player)
+                    && let Ok(file) = std::fs::File::open(&*path_string) {
                         *player = Player::connect_new(stream.mixer());
                         if let Ok(src) = Decoder::try_from(file) { player.append(src); }
                     }
-                }
 
-                if !durations.contains_key(path_string) {
+                if !ctx.durations.contains_key(path_string) {
                     let dur_str = if let Ok(file) = std::fs::File::open(&*path_string) {
                         if let Ok(src) = Decoder::try_from(file) {
                             if let Some(d) = src.total_duration() { format!("{:02}:{:02}", d.as_secs() / 60, d.as_secs() % 60) }
                             else { "??:??".to_string() }
                         } else { "Err".to_string() }
                     } else { "Err".to_string() };
-                    durations.insert(path_string.clone(), dur_str);
+                    ctx.durations.insert(path_string.clone(), dur_str);
                 }
 
-                if let Some(d_str) = durations.get(path_string) {
+                if let Some(d_str) = ctx.durations.get(path_string) {
                     ui.label(egui::RichText::new(format!("⏱ {}", d_str)).weak());
                 }
             }
         });
     }
 
-    fn optional_audio_path_edit_with_browser(ui: &mut egui::Ui, label: &str, value: &mut Option<String>, default_folder: &str, stream: &MixerDeviceSink, player: &mut Player, durations: &mut HashMap<String, String>) {
+    fn optional_audio_path_edit_with_browser(
+        ui: &mut egui::Ui,
+        label: &str,
+        value: &mut Option<String>,
+        default_folder: &str,
+        ctx: &mut AudioEditorCtx,
+    ) {
         let mut current_text = value.clone().unwrap_or_default();
-        Self::audio_path_edit_with_browser(ui, label, &mut current_text, default_folder, stream, player, durations);
+        Self::audio_path_edit_with_browser(ui, label, &mut current_text, default_folder, ctx);
         *value = if current_text.trim().is_empty() { None } else { Some(current_text) };
     }
 
@@ -195,7 +212,7 @@ impl VnEditor {
             if let Some(file_name) = path.file_name() {
                 let mut target = PathBuf::from(target_folder);
                 target.push(file_name);
-                if let Ok(_) = std::fs::copy(path, &target) { *original_path = target.to_string_lossy().replace("\\", "/"); }
+                if std::fs::copy(path, &target).is_ok() { *original_path = target.to_string_lossy().replace("\\", "/"); }
             }
         }
     }
@@ -244,7 +261,27 @@ impl VnEditor {
         if binds.editor_move_down.is_pressed(ui) { trigger_move_down = true; }
         if binds.editor_delete_action.is_pressed(ui) { trigger_delete = true; }
 
-        let VnEditor { chapter, collapsed_states, selected_action, _audio_stream, audio_player, audio_durations } = self;
+        let VnEditor { chapter, collapsed_states, selected_action, error_message, _audio_stream, audio_player, audio_durations } = self;
+
+        if let Some(err) = error_message {
+            let mut close = false;
+            egui::Window::new("❌ Fehler")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ui.ctx(), |ui| {
+                    ui.label(egui::RichText::new(&*err).color(egui::Color32::LIGHT_RED));
+                    ui.add_space(15.0);
+                    ui.vertical_centered(|ui| {
+                        if ui.button("OK").clicked() {
+                            close = true;
+                        }
+                    });
+                });
+            if close {
+                *error_message = None;
+            }
+        }
 
         if trigger_select_up {
             if let Some(sel) = selected_action {
@@ -264,22 +301,17 @@ impl VnEditor {
         let mut action_to_delete = None;
         let mut action_to_swap = None;
 
-        if trigger_move_up {
-            if let Some(sel) = selected_action {
-                if *sel > 0 { action_to_swap = Some((*sel, *sel - 1)); }
-            }
-        }
-        if trigger_move_down {
-            if let Some(sel) = selected_action {
-                if *sel < chapter.actions.len() - 1 { action_to_swap = Some((*sel, *sel + 1)); }
-            }
-        }
-        if trigger_delete {
-            if let Some(sel) = selected_action {
+        if trigger_move_up
+            && let Some(sel) = selected_action
+                && *sel > 0 { action_to_swap = Some((*sel, *sel - 1)); }
+        if trigger_move_down
+            && let Some(sel) = selected_action
+                && *sel < chapter.actions.len() - 1 { action_to_swap = Some((*sel, *sel + 1)); }
+        if trigger_delete
+            && let Some(sel) = selected_action {
                 action_to_delete = Some(*sel);
                 *selected_action = None;
             }
-        }
 
         egui::Panel::top("top_panel").show_inside(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
@@ -303,23 +335,37 @@ impl VnEditor {
                         if let Some(theme) = &mut chapter.theme {
                             Self::process_optional_asset_path(&mut theme.character_frame_image, "assets/pictures/frames");
                         }
-                        if let Ok(json_str) = serde_json::to_string_pretty(&chapter) {
-                            let _ = std::fs::write(&path, json_str);
-                        }
-                    }
-                }
-                if ui.button("📂 Laden").clicked() {
-                    if let Some(path) = rfd::FileDialog::new().add_filter("JSON", &["json"]).pick_file() {
-                        if let Ok(s) = std::fs::read_to_string(&path) {
-                            if let Ok(loaded) = serde_json::from_str::<Chapter>(&s) {
-                                *chapter = loaded;
-                                *collapsed_states = vec![false; chapter.actions.len()];
-                                *selected_action = None;
-                                audio_durations.clear();
+                        match serde_json::to_string_pretty(&chapter) {
+                            Ok(json_str) => {
+                                if let Err(e) = std::fs::write(&path, json_str) {
+                                    *error_message = Some(format!("Fehler beim Speichern der Datei:\n\n{}", e));
+                                }
+                            }
+                            Err(e) => {
+                                *error_message = Some(format!("Fehler bei der Serialisierung:\n\n{}", e));
                             }
                         }
                     }
                 }
+                if ui.button("📂 Laden").clicked()
+                    && let Some(path) = rfd::FileDialog::new().add_filter("JSON", &["json"]).pick_file() {
+                        match std::fs::read_to_string(&path) {
+                            Ok(s) => match serde_json::from_str::<Chapter>(&s) {
+                                Ok(loaded) => {
+                                    *chapter = loaded;
+                                    *collapsed_states = vec![false; chapter.actions.len()];
+                                    *selected_action = None;
+                                    audio_durations.clear();
+                                }
+                                Err(e) => {
+                                    *error_message = Some(format!("Fehler beim Parsen der Datei '{}':\n\n{}", path.display(), e));
+                                }
+                            },
+                            Err(e) => {
+                                *error_message = Some(format!("Konnte Datei '{}' nicht öffnen:\n\n{}", path.display(), e));
+                            }
+                        }
+                    }
             });
         });
 
@@ -370,6 +416,12 @@ impl VnEditor {
 
             ui.horizontal(|ui| {
                 ui.heading("Aktionen");
+                if ui.button("🔽 Alle auf").clicked() {
+                    collapsed_states.fill(false);
+                }
+                if ui.button("🔼 Alle zu").clicked() {
+                    collapsed_states.fill(true);
+                }
                 
                 let mut added_action = None;
                 if ui.button("➕ BG").clicked() || trigger_add_bg { added_action = Some(Action::SetBackground { image_path: String::new() }); }
@@ -397,7 +449,23 @@ impl VnEditor {
 
             if collapsed_states.len() != chapter.actions.len() { collapsed_states.resize(chapter.actions.len(), false); }
 
+            let existing_labels: Vec<String> = chapter.actions.iter().filter_map(|a| {
+                if let Action::Label { name } = a {
+                    let t = name.trim();
+                    if !t.is_empty() { Some(t.to_string()) } else { None }
+                } else {
+                    None
+                }
+            }).collect();
+
+            let mut audio_ctx = AudioEditorCtx {
+                stream: _audio_stream.as_ref(),
+                player: audio_player,
+                durations: audio_durations,
+            };
+
             egui::ScrollArea::vertical().show(ui, |ui| {
+                #[allow(clippy::needless_range_loop)]
                 for index in 0..chapter.actions.len() {
                     ui.push_id(index, |ui| {
                         let is_collapsed = collapsed_states[index];
@@ -449,7 +517,20 @@ impl VnEditor {
                                             ui.horizontal(|ui| { ui.label("Name:"); ui.text_edit_singleline(name); });
                                         }
                                         Action::Jump { target_label } => {
-                                            ui.horizontal(|ui| { ui.label("Zu Label springen:"); ui.text_edit_singleline(target_label); });
+                                            ui.horizontal(|ui| {
+                                                ui.label("Zu Label springen:");
+                                                ui.text_edit_singleline(target_label);
+                                                if !existing_labels.is_empty() {
+                                                    let current = if target_label.trim().is_empty() { "Label wählen..." } else { target_label.as_str() };
+                                                    egui::ComboBox::from_id_salt(format!("jump_combo_{}", index))
+                                                        .selected_text(current)
+                                                        .show_ui(ui, |ui| {
+                                                            for lbl in &existing_labels {
+                                                                ui.selectable_value(target_label, lbl.clone(), lbl);
+                                                            }
+                                                        });
+                                                }
+                                            });
                                         }
                                         Action::Choice { question, options } => {
                                             ui.horizontal(|ui| { ui.label("Frage:"); ui.text_edit_singleline(question); });
@@ -459,6 +540,16 @@ impl VnEditor {
                                                 ui.horizontal(|ui| {
                                                     ui.label("Antwort:"); ui.text_edit_singleline(&mut opt.text);
                                                     ui.label("➡ Label:"); ui.text_edit_singleline(&mut opt.target_label);
+                                                    if !existing_labels.is_empty() {
+                                                        let current = if opt.target_label.trim().is_empty() { "Wählen..." } else { opt.target_label.as_str() };
+                                                        egui::ComboBox::from_id_salt(format!("choice_combo_{}_{}", index, idx))
+                                                            .selected_text(current)
+                                                            .show_ui(ui, |ui| {
+                                                                for lbl in &existing_labels {
+                                                                    ui.selectable_value(&mut opt.target_label, lbl.clone(), lbl);
+                                                                }
+                                                            });
+                                                    }
                                                     if ui.button("❌").clicked() { to_remove = Some(idx); }
                                                 });
                                             }
@@ -472,13 +563,13 @@ impl VnEditor {
                                             let screen_height = ui.ctx().content_rect().height();
                                             let dialog_height = (screen_height * 0.10).max(60.0);
                                             ui.add_sized(egui::vec2(ui.available_width(), dialog_height), egui::TextEdit::multiline(text));
-                                            Self::optional_audio_path_edit_with_browser(ui, "Voice:", audio_path, "assets/audio/voices", _audio_stream, audio_player, audio_durations);
+                                            Self::optional_audio_path_edit_with_browser(ui, "Voice:", audio_path, "assets/audio/voices", &mut audio_ctx);
                                         }
                                         Action::PlayMusic { audio_path } => {
-                                            Self::audio_path_edit_with_browser(ui, "Musik-Pfad:", audio_path, "assets/audio/music", _audio_stream, audio_player, audio_durations);
+                                            Self::audio_path_edit_with_browser(ui, "Musik-Pfad:", audio_path, "assets/audio/music", &mut audio_ctx);
                                         }
                                         Action::PlaySound { audio_path } => {
-                                            Self::audio_path_edit_with_browser(ui, "SFX-Pfad:", audio_path, "assets/audio/sfx", _audio_stream, audio_player, audio_durations);
+                                            Self::audio_path_edit_with_browser(ui, "SFX-Pfad:", audio_path, "assets/audio/sfx", &mut audio_ctx);
                                         }
                                     }
                                 }
@@ -503,10 +594,44 @@ impl VnEditor {
                 chapter.actions.remove(idx); 
                 collapsed_states.remove(idx); 
                 if Some(idx) == *selected_action { *selected_action = None; }
-                else if let Some(sel) = selected_action {
-                    if *sel > idx { *sel -= 1; }
-                }
+                else if let Some(sel) = selected_action
+                    && *sel > idx { *sel -= 1; }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_editor_with_chapter() {
+        let chapter = Chapter {
+            title: "Test".to_string(),
+            theme: None,
+            actions: vec![
+                Action::SetBackground { image_path: "assets/pictures/bg.png".to_string() },
+                Action::Dialogue { speaker_name: None, text: "Hi".to_string(), audio_path: None },
+            ],
+        };
+        let editor = VnEditor::with_chapter(chapter);
+        assert_eq!(editor.collapsed_states.len(), 2);
+        assert_eq!(editor.collapsed_states[0], false);
+        assert_eq!(editor.chapter.actions.len(), 2);
+    }
+
+    #[test]
+    fn test_process_asset_path_already_in_assets() {
+        let mut path = "assets/pictures/backgrounds/school.png".to_string();
+        VnEditor::process_asset_path(&mut path, "assets/pictures/backgrounds");
+        assert_eq!(path, "assets/pictures/backgrounds/school.png");
+    }
+
+    #[test]
+    fn test_process_asset_path_empty() {
+        let mut path = String::new();
+        VnEditor::process_asset_path(&mut path, "assets/pictures/backgrounds");
+        assert!(path.is_empty());
     }
 }

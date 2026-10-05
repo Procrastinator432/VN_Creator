@@ -50,13 +50,12 @@ pub fn run_mcp_server() -> io::Result<()> {
         // If request has no id, it is a notification -> do not respond!
         let is_notification = req.id.is_none();
 
-        if let Some(resp) = handle_request(&req) {
-            if !is_notification {
+        if let Some(resp) = handle_request(&req)
+            && !is_notification {
                 let out = serde_json::to_string(&resp)?;
                 writeln!(stdout, "{}", out)?;
                 stdout.flush()?;
             }
-        }
     }
 
     eprintln!("[MCP] VN_Creator MCP-Server beendet.");

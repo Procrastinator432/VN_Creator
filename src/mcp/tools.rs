@@ -265,8 +265,8 @@ fn scan_for_chapters(dir: &Path, list: &mut Vec<ChapterSummaryItem>) {
             if name == "settings.json" {
                 continue;
             }
-            if let Ok(content) = fs::read_to_string(&path) {
-                if let Ok(chapter) = serde_json::from_str::<Chapter>(&content) {
+            if let Ok(content) = fs::read_to_string(&path)
+                && let Ok(chapter) = serde_json::from_str::<Chapter>(&content) {
                     let mut characters = Vec::new();
                     let mut dialogue_count = 0;
                     let mut has_choices = false;
@@ -276,11 +276,10 @@ fn scan_for_chapters(dir: &Path, list: &mut Vec<ChapterSummaryItem>) {
                         match act {
                             Action::Dialogue { speaker_name, audio_path, .. } => {
                                 dialogue_count += 1;
-                                if let Some(spk) = speaker_name {
-                                    if !spk.is_empty() && !characters.contains(spk) {
+                                if let Some(spk) = speaker_name
+                                    && !spk.is_empty() && !characters.contains(spk) {
                                         characters.push(spk.clone());
                                     }
-                                }
                                 if audio_path.is_some() {
                                     has_audio = true;
                                 }
@@ -306,7 +305,6 @@ fn scan_for_chapters(dir: &Path, list: &mut Vec<ChapterSummaryItem>) {
                         has_audio,
                     });
                 }
-            }
         }
     }
 }
@@ -409,11 +407,10 @@ fn tool_create_chapter(args: &Value) -> CallToolResult {
         actions,
     };
 
-    if let Some(parent) = target_path.parent() {
-        if !parent.as_os_str().is_empty() {
+    if let Some(parent) = target_path.parent()
+        && !parent.as_os_str().is_empty() {
             let _ = fs::create_dir_all(parent);
         }
-    }
 
     let json_text = match serde_json::to_string_pretty(&chapter) {
         Ok(t) => t,
@@ -454,11 +451,10 @@ fn tool_save_chapter(args: &Value) -> CallToolResult {
         return CallToolResult::error(format!("Datei '{}' existiert bereits und overwrite ist false.", path_str));
     }
 
-    if let Some(parent) = target_path.parent() {
-        if !parent.as_os_str().is_empty() {
+    if let Some(parent) = target_path.parent()
+        && !parent.as_os_str().is_empty() {
             let _ = fs::create_dir_all(parent);
         }
-    }
 
     let json_text = match serde_json::to_string_pretty(&chapter) {
         Ok(t) => t,
@@ -597,7 +593,7 @@ fn tool_list_assets(args: &Value) -> CallToolResult {
         total_count: 0,
     };
 
-    scan_asset_files(&assets_dir, &assets_dir, &mut inventory);
+    scan_asset_files(&assets_dir, &mut inventory);
 
     match category {
         "backgrounds" => CallToolResult::json(&json!({ "backgrounds": inventory.backgrounds })),
@@ -610,7 +606,7 @@ fn tool_list_assets(args: &Value) -> CallToolResult {
     }
 }
 
-fn scan_asset_files(current: &Path, root: &Path, inv: &mut AssetInventory) {
+fn scan_asset_files(current: &Path, inv: &mut AssetInventory) {
     let entries = match fs::read_dir(current) {
         Ok(e) => e,
         Err(_) => return,
@@ -619,7 +615,7 @@ fn scan_asset_files(current: &Path, root: &Path, inv: &mut AssetInventory) {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            scan_asset_files(&path, root, inv);
+            scan_asset_files(&path, inv);
         } else if path.is_file() {
             let rel = path.to_string_lossy().replace('\\', "/");
             let lower = rel.to_lowercase();

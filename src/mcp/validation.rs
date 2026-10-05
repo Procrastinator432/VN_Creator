@@ -68,13 +68,11 @@ pub fn validate_chapter_data(chapter: &Chapter, base_dir: Option<&Path>) -> Vali
         });
     }
 
-    if let Some(theme) = &chapter.theme {
-        if let Some(frame_img) = &theme.character_frame_image {
-            if !frame_img.trim().is_empty() {
+    if let Some(theme) = &chapter.theme
+        && let Some(frame_img) = &theme.character_frame_image
+            && !frame_img.trim().is_empty() {
                 check_asset_exists(frame_img, 0, "Charakter-Rahmen (Theme)", base_dir, &mut issues);
             }
-        }
-    }
 
     for (idx, action) in chapter.actions.iter().enumerate() {
         match action {
@@ -104,8 +102,8 @@ pub fn validate_chapter_data(chapter: &Chapter, base_dir: Option<&Path>) -> Vali
                 jump_targets.push((target_label.clone(), idx));
 
                 // Warning if immediately followed by an action other than Label
-                if idx + 1 < chapter.actions.len() {
-                    if !matches!(chapter.actions[idx + 1], Action::Label { .. }) {
+                if idx + 1 < chapter.actions.len()
+                    && !matches!(chapter.actions[idx + 1], Action::Label { .. }) {
                         issues.push(ValidationIssue {
                             severity: "info".to_string(),
                             action_index: Some(idx + 1),
@@ -115,7 +113,6 @@ pub fn validate_chapter_data(chapter: &Chapter, base_dir: Option<&Path>) -> Vali
                             ),
                         });
                     }
-                }
             }
             Action::Choice { question, options } => {
                 choices_count += 1;
@@ -148,17 +145,15 @@ pub fn validate_chapter_data(chapter: &Chapter, base_dir: Option<&Path>) -> Vali
                         message: format!("Aktion #{}: Dialogtext ist leer.", idx),
                     });
                 }
-                if let Some(speaker) = speaker_name {
-                    if !speaker.trim().is_empty() {
+                if let Some(speaker) = speaker_name
+                    && !speaker.trim().is_empty() {
                         characters_set.insert(speaker.clone());
                     }
-                }
-                if let Some(audio) = audio_path {
-                    if !audio.trim().is_empty() {
+                if let Some(audio) = audio_path
+                    && !audio.trim().is_empty() {
                         voice_count += 1;
                         check_asset_exists(audio, idx, "Voice-Audio", base_dir, &mut issues);
                     }
-                }
             }
             Action::SetBackground { image_path } => {
                 if image_path.trim().is_empty() {
@@ -200,17 +195,15 @@ pub fn validate_chapter_data(chapter: &Chapter, base_dir: Option<&Path>) -> Vali
                         action_index: Some(idx),
                         message: format!("Aktion #{}: HideCharacter character_id ist leer.", idx),
                     });
-                } else {
-                    if !active_characters.remove(character_id) {
-                        issues.push(ValidationIssue {
-                            severity: "info".to_string(),
-                            action_index: Some(idx),
-                            message: format!(
-                                "Aktion #{}: HideCharacter für '{}', aber Charakter wurde vorher nicht eingeblendet.",
-                                idx, character_id
-                            ),
-                        });
-                    }
+                } else if !active_characters.remove(character_id) {
+                    issues.push(ValidationIssue {
+                        severity: "info".to_string(),
+                        action_index: Some(idx),
+                        message: format!(
+                            "Aktion #{}: HideCharacter für '{}', aber Charakter wurde vorher nicht eingeblendet.",
+                            idx, character_id
+                        ),
+                    });
                 }
             }
             Action::PlayMusic { audio_path } => {
@@ -335,11 +328,10 @@ fn check_asset_exists(
     let p = Path::new(asset_path);
     let mut exists = p.exists();
 
-    if !exists {
-        if let Some(base) = base_dir {
+    if !exists
+        && let Some(base) = base_dir {
             exists = base.join(p).exists();
         }
-    }
 
     if !exists {
         issues.push(ValidationIssue {

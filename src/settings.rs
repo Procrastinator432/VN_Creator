@@ -271,11 +271,10 @@ impl Settings {
         ui.horizontal(|ui| {
             ui.label(label);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if current_shortcut.key.is_some() {
-                    if ui.button("❌").clicked() {
+                if current_shortcut.key.is_some()
+                    && ui.button("❌").clicked() {
                         self.assign_key(target_id, KeyShortcut::default());
                     }
-                }
                 if ui.button(current_shortcut.display_name()).clicked() {
                     self.waiting_for_key = Some(target_id.to_string());
                 }
@@ -316,5 +315,37 @@ impl Settings {
             _ => {}
         }
         self.save();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_settings_default_and_serialization() {
+        let settings = Settings::default();
+        assert_eq!(settings.volume_master, 1.0);
+        assert_eq!(settings.volume_bgm, 1.0);
+        assert_eq!(settings.volume_sfx, 1.0);
+        assert_eq!(settings.volume_voice, 1.0);
+
+        let json = serde_json::to_string(&settings).expect("Serialization failed");
+        let deserialized: Settings = serde_json::from_str(&json).expect("Deserialization failed");
+        assert_eq!(deserialized.volume_master, 1.0);
+        assert_eq!(deserialized.keybindings.global_menu.key, Some(egui::Key::Escape));
+    }
+
+    #[test]
+    fn test_key_shortcut_display_name() {
+        let sc = KeyShortcut::new(egui::Key::Space);
+        assert_eq!(sc.display_name(), "Leertaste");
+
+        let sc_ctrl = KeyShortcut::with_modifiers(egui::Key::S, true, false, false);
+        assert!(sc_ctrl.display_name().contains("Strg"));
+        assert!(sc_ctrl.display_name().contains("S"));
+
+        let empty = KeyShortcut::default();
+        assert_eq!(empty.display_name(), "Nicht belegt");
     }
 }
