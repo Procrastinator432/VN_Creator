@@ -7,7 +7,25 @@ pub struct Chapter {
     pub actions: Vec<Action>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AspectRatio {
+    #[default]
+    Landscape,
+    Portrait,
+    Auto,
+}
+
+impl AspectRatio {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Landscape => "Landscape (16:9)",
+            Self::Portrait => "Portrait (9:16)",
+            Self::Auto => "Auto (Responsiv)",
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 pub struct Theme {
     pub textbox_color: Option<[u8; 4]>,
     pub frame_color: Option<[u8; 4]>,
@@ -15,6 +33,8 @@ pub struct Theme {
     pub show_textbox_frame: Option<bool>,
     #[serde(default)]
     pub character_frame_image: Option<String>,
+    #[serde(default)]
+    pub aspect_ratio: Option<AspectRatio>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]

@@ -63,7 +63,8 @@ pub fn get_tool_definitions() -> Vec<ToolDefinition> {
                             "frame_color": { "type": "array", "items": { "type": "integer" }, "description": "[r, g, b, a]" },
                             "show_character_frames": { "type": "boolean" },
                             "show_textbox_frame": { "type": "boolean" },
-                            "character_frame_image": { "type": "string", "description": "Optionaler Bildpfad für Rahmen der Charaktere (z.B. 'assets/pictures/frames/frame.png')" }
+                            "character_frame_image": { "type": "string", "description": "Optionaler Bildpfad für Rahmen der Charaktere (z.B. 'assets/pictures/frames/frame.png')" },
+                            "aspect_ratio": { "type": "string", "enum": ["Landscape", "Portrait", "Auto"], "description": "Seitenverhältnis des Kapitels: 'Landscape' (16:9), 'Portrait' (9:16 Mobile-Layout) oder 'Auto'" }
                         }
                     },
                     "actions": {

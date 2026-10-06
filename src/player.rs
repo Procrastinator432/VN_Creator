@@ -1,6 +1,6 @@
 use eframe::egui;
 use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Source};
-use crate::models::{Chapter, Action, ActiveCharacter, ChoiceOption, SaveState};
+use crate::models::{Chapter, Action, ActiveCharacter, ChoiceOption, SaveState, AspectRatio};
 use crate::settings::Settings;
 
 pub struct VnPlayer {
@@ -39,6 +39,7 @@ pub struct VnPlayer {
     
     bg_fade: f32,
     char_fade: f32,
+    has_applied_initial_aspect: bool,
 }
 
 impl VnPlayer {
@@ -94,6 +95,7 @@ impl VnPlayer {
             is_in_menu: false,
             bg_fade: 1.0,
             char_fade: 1.0,
+            has_applied_initial_aspect: false,
         };
 
         vn_player.apply_volumes();
@@ -135,6 +137,10 @@ impl VnPlayer {
             history: self.history.clone(),
             current_bgm: self.current_bgm.clone(),
         }
+    }
+
+    pub fn chapter_aspect(&self) -> Option<AspectRatio> {
+        self.chapter.theme.as_ref().and_then(|t| t.aspect_ratio)
     }
 
     fn apply_volumes(&self) {
@@ -335,6 +341,60 @@ impl VnPlayer {
                 }
         }
     }
+
+    fn draw_stage_character(
+        &self,
+        ui: &mut egui::Ui,
+        character: &ActiveCharacter,
+        frame: egui::Frame,
+        frame_image: Option<&str>,
+        rect: egui::Rect,
+        alpha_multiplier: f32,
+    ) {
+        let uri = format!("file://{}", character.image_path);
+        let tint = egui::Color32::from_white_alpha((self.char_fade * alpha_multiplier * 255.0) as u8);
+
+        let mut char_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+        char_ui.set_clip_rect(rect);
+
+        if let Ok(egui::load::TexturePoll::Ready { texture, .. }) =
+            ui.ctx().try_load_texture(&uri, egui::TextureOptions::default(), egui::SizeHint::default())
+        {
+            let image_aspect = texture.size[0] / texture.size[1];
+            let mut target_h = rect.height();
+            let mut target_w = target_h * image_aspect;
+
+            if target_w > rect.width() {
+                target_w = rect.width();
+                target_h = target_w / image_aspect;
+            }
+
+            let sprite_x = rect.center().x - target_w / 2.0;
+            let sprite_y = rect.bottom() - target_h;
+            let sprite_rect = egui::Rect::from_min_size(egui::pos2(sprite_x, sprite_y), egui::vec2(target_w, target_h));
+
+            frame.show(&mut char_ui, |ui| {
+                let image = egui::Image::new(&uri)
+                    .fit_to_exact_size(egui::vec2(target_w, target_h))
+                    .maintain_aspect_ratio(false)
+                    .tint(tint);
+                ui.put(sprite_rect, image);
+            });
+
+            if let Some(frame_path) = frame_image
+                && !frame_path.trim().is_empty() {
+                    let frame_uri = format!("file://{}", frame_path);
+                    let overlay = egui::Image::new(&frame_uri)
+                        .fit_to_exact_size(egui::vec2(target_w, target_h))
+                        .maintain_aspect_ratio(false)
+                        .tint(tint);
+                    char_ui.put(sprite_rect, overlay);
+                }
+        } else {
+            let mut spinner_ui = char_ui.new_child(egui::UiBuilder::new().max_rect(rect));
+            spinner_ui.centered_and_justified(|ui| { ui.spinner(); });
+        }
+    }
 }
 
 impl VnPlayer {
@@ -414,6 +474,23 @@ impl VnPlayer {
 
         let mut advance_chapter = false;
         let full_rect = ui.max_rect();
+        let win_aspect = full_rect.width() / full_rect.height().max(1.0);
+        let is_vertical = match self.chapter.theme.as_ref().and_then(|t| t.aspect_ratio) {
+            Some(AspectRatio::Portrait) => true,
+            Some(AspectRatio::Landscape) => false,
+            Some(AspectRatio::Auto) | None => win_aspect < 1.0,
+        };
+
+        if !self.has_applied_initial_aspect {
+            self.has_applied_initial_aspect = true;
+            if let Some(theme) = &self.chapter.theme {
+                if theme.aspect_ratio == Some(AspectRatio::Portrait) && !is_vertical {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(450.0, 800.0)));
+                } else if theme.aspect_ratio == Some(AspectRatio::Landscape) && is_vertical {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(1200.0, 800.0)));
+                }
+            }
+        }
 
         if let Some(bg) = &self.current_background {
             let uri = format!("file://{}", bg);
@@ -421,7 +498,6 @@ impl VnPlayer {
             bg_ui.set_clip_rect(full_rect);
 
             let bg_aspect = self.current_bg_aspect;
-            let win_aspect = full_rect.width() / full_rect.height();
             let mut target_size = full_rect.size();
 
             if win_aspect > bg_aspect {
@@ -437,13 +513,17 @@ impl VnPlayer {
             });
         }
 
-        let log_rect = egui::Rect::from_min_size(full_rect.min + egui::vec2(20.0, 20.0), egui::vec2(140.0, 45.0));
-        if ui.put(log_rect, egui::Button::new(egui::RichText::new("📜 Logbuch").size(18.0))).clicked() || binds.player_log.is_pressed(ui) {
+        let btn_w = if is_vertical { 95.0 } else { 130.0 };
+        let btn_h = if is_vertical { 36.0 } else { 42.0 };
+        let font_sz = if is_vertical { 15.0 } else { 18.0 };
+
+        let log_rect = egui::Rect::from_min_size(full_rect.min + egui::vec2(15.0, 15.0), egui::vec2(btn_w, btn_h));
+        if ui.put(log_rect, egui::Button::new(egui::RichText::new("📜 Log").size(font_sz))).clicked() || binds.player_log.is_pressed(ui) {
             self.show_history = !self.show_history;
         }
 
-        let menu_rect = egui::Rect::from_min_size(full_rect.min + egui::vec2(full_rect.width() - 160.0, 20.0), egui::vec2(140.0, 45.0));
-        if ui.put(menu_rect, egui::Button::new(egui::RichText::new("⚙ Menü").size(18.0))).clicked() || (!self.is_in_menu && binds.global_menu.is_pressed(ui)) {
+        let menu_rect = egui::Rect::from_min_size(egui::pos2(full_rect.right() - btn_w - 15.0, full_rect.top() + 15.0), egui::vec2(btn_w, btn_h));
+        if ui.put(menu_rect, egui::Button::new(egui::RichText::new("⚙ Menü").size(font_sz))).clicked() || (!self.is_in_menu && binds.global_menu.is_pressed(ui)) {
             self.is_in_menu = true;
             if let Some(bgm) = &self.bgm_player { bgm.pause(); }
             if let Some(sfx) = &self.sfx_player { sfx.pause(); }
@@ -454,7 +534,25 @@ impl VnPlayer {
             if let Some(voice) = &self.audio_player { voice.play(); }
         }
 
-        let textbox_height = (full_rect.height() * 0.30).max(180.0);
+        let toggle_label = if is_vertical { "🖥 16:9" } else { "📱 9:16" };
+        let center_rect = egui::Rect::from_center_size(
+            egui::pos2(full_rect.center().x, full_rect.top() + 15.0 + btn_h / 2.0),
+            egui::vec2(btn_w, btn_h),
+        );
+        if ui.put(center_rect, egui::Button::new(egui::RichText::new(toggle_label).size(font_sz))).clicked() {
+            let target_size = if is_vertical {
+                egui::vec2(1200.0, 800.0)
+            } else {
+                egui::vec2(450.0, 800.0)
+            };
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::InnerSize(target_size));
+        }
+
+        let textbox_height = if is_vertical {
+            (full_rect.height() * 0.28).clamp(160.0, 260.0)
+        } else {
+            (full_rect.height() * 0.30).max(180.0)
+        };
         let mut textbox_rect = full_rect;
         textbox_rect.set_top(full_rect.bottom() - textbox_height);
 
@@ -490,94 +588,205 @@ impl VnPlayer {
             if let Some(cfi) = &theme.character_frame_image { char_frame_image = Some(cfi.clone()); }
         }
 
-        let mut text_ui = ui.new_child(egui::UiBuilder::new().max_rect(textbox_rect));
+        let portrait_frame = if char_frame_image.is_some() {
+            egui::Frame::default()
+                .fill(egui::Color32::from_black_alpha(80))
+                .inner_margin(8.0)
+        } else if show_char_frames {
+            egui::Frame::default()
+                .fill(egui::Color32::from_black_alpha(100))
+                .stroke(egui::Stroke::new(3.0, frame_color))
+                .corner_radius(10.0)
+                .inner_margin(5.0)
+        } else {
+            egui::Frame::default()
+        };
+
         let mut skip_text = false;
 
-        egui::Frame::default()
-            .fill(box_bg)
-            .stroke(if show_text_frame { egui::Stroke::new(2.0, frame_color) } else { egui::Stroke::NONE })
-            .inner_margin(0.0)
-            .show(&mut text_ui, |ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+        if is_vertical {
+            // Mobiles Hochformat: Charaktere auf der Bühne oberhalb der Textbox
+            let top_offset = 65.0;
+            let stage_h = (textbox_rect.top() - full_rect.top() - top_offset).max(100.0);
+            let stage_rect = egui::Rect::from_min_size(
+                egui::pos2(full_rect.left(), full_rect.top() + top_offset),
+                egui::vec2(full_rect.width(), stage_h),
+            );
 
-                let portrait_width = textbox_height * 0.8;
-                let text_width = (textbox_rect.width() - (portrait_width * 2.0)).max(100.0);
+            if let Some(inactive) = inactive_char {
+                let is_speaker_first = active_char.is_some_and(|a| {
+                    self.active_characters.iter().position(|c| c.id == a.id)
+                        < self.active_characters.iter().position(|c| c.id == inactive.id)
+                });
 
-                let portrait_frame = if char_frame_image.is_some() {
-                    egui::Frame::default()
-                        .fill(egui::Color32::from_black_alpha(80))
-                        .inner_margin(8.0)
-                } else if show_char_frames {
-                    egui::Frame::default()
-                        .fill(egui::Color32::from_black_alpha(100))
-                        .stroke(egui::Stroke::new(3.0, frame_color))
-                        .corner_radius(10.0)
-                        .inner_margin(5.0)
+                let w = stage_rect.width() * 0.58;
+                let left_rect = egui::Rect::from_min_size(
+                    egui::pos2(stage_rect.left() - stage_rect.width() * 0.05, stage_rect.top()),
+                    egui::vec2(w, stage_rect.height()),
+                );
+                let right_rect = egui::Rect::from_min_size(
+                    egui::pos2(stage_rect.right() - w + stage_rect.width() * 0.05, stage_rect.top()),
+                    egui::vec2(w, stage_rect.height()),
+                );
+
+                let (first_rect, second_rect) = if is_speaker_first {
+                    (right_rect, left_rect)
                 } else {
-                    egui::Frame::default()
+                    (left_rect, right_rect)
                 };
 
-                ui.horizontal(|ui| {
-                    self.draw_portrait_column(
+                self.draw_stage_character(
+                    ui,
+                    inactive,
+                    portrait_frame,
+                    char_frame_image.as_deref(),
+                    first_rect,
+                    0.72,
+                );
+
+                if let Some(active) = active_char {
+                    self.draw_stage_character(
                         ui,
-                        active_char,
+                        active,
                         portrait_frame,
                         char_frame_image.as_deref(),
-                        egui::vec2(portrait_width, textbox_height),
-                        self.char_fade,
+                        second_rect,
+                        1.0,
                     );
+                }
+            } else if let Some(active) = active_char {
+                let w = stage_rect.width() * 0.90;
+                let char_rect = egui::Rect::from_min_size(
+                    egui::pos2(stage_rect.center().x - w / 2.0, stage_rect.top()),
+                    egui::vec2(w, stage_rect.height()),
+                );
+                self.draw_stage_character(
+                    ui,
+                    active,
+                    portrait_frame,
+                    char_frame_image.as_deref(),
+                    char_rect,
+                    1.0,
+                );
+            }
 
-                    let (mid_rect, _) = ui.allocate_exact_size(egui::vec2(text_width, textbox_height), egui::Sense::hover());
-                    let mut mid_ui = ui.new_child(egui::UiBuilder::new().max_rect(mid_rect));
+            // Textbox über volle Breite am unteren Rand
+            let mut text_ui = ui.new_child(egui::UiBuilder::new().max_rect(textbox_rect));
+            egui::Frame::default()
+                .fill(box_bg)
+                .stroke(if show_text_frame { egui::Stroke::new(2.0, frame_color) } else { egui::Stroke::NONE })
+                .inner_margin(16.0)
+                .show(&mut text_ui, |ui| {
+                    ui.vertical(|ui| {
+                        if let Some(speaker) = &self.current_speaker {
+                            ui.heading(egui::RichText::new(speaker).color(egui::Color32::from_rgb(100, 200, 255)).size(20.0));
+                        } else {
+                            ui.heading(egui::RichText::new("Erzähler").italics().color(egui::Color32::GRAY).size(18.0));
+                        }
 
-                    egui::Frame::default().inner_margin(20.0).show(&mut mid_ui, |ui| {
-                        ui.vertical(|ui| {
-                            if let Some(speaker) = &self.current_speaker {
-                                ui.heading(egui::RichText::new(speaker).color(egui::Color32::from_rgb(100, 200, 255)));
-                            } else {
-                                ui.heading(egui::RichText::new("Erzähler").italics().color(egui::Color32::GRAY));
-                            }
+                        ui.add_space(8.0);
 
-                            ui.add_space(10.0);
-                            
-                            let mut visible_chars = self.current_text.len();
-                            if self.text_target_duration > 0.0 && self.text_elapsed_time < self.text_target_duration {
-                                let ratio = self.text_elapsed_time / self.text_target_duration;
-                                visible_chars = (self.current_text.len() as f32 * ratio).floor() as usize;
-                                ui.ctx().request_repaint();
-                            }
-                            
-                            let visible_text: String = self.current_text.chars().take(visible_chars).collect();
-                            ui.label(egui::RichText::new(&visible_text).size(20.0));
+                        let mut visible_chars = self.current_text.len();
+                        if self.text_target_duration > 0.0 && self.text_elapsed_time < self.text_target_duration {
+                            let ratio = self.text_elapsed_time / self.text_target_duration;
+                            visible_chars = (self.current_text.len() as f32 * ratio).floor() as usize;
+                            ui.ctx().request_repaint();
+                        }
 
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::BOTTOM), |ui| {
-                                if self.waiting_for_choice.is_none() && !self.is_in_menu {
-                                    
-                                    let advance_pressed = binds.player_advance.is_pressed(ui);
-                                    let skip_pressed = binds.player_skip.is_pressed(ui);
+                        let visible_text: String = self.current_text.chars().take(visible_chars).collect();
+                        ui.label(egui::RichText::new(&visible_text).size(18.0));
 
-                                    if visible_chars < self.current_text.len() {
-                                        if ui.button("⏭ Überspringen").clicked() || skip_pressed {
-                                            skip_text = true;
-                                        }
-                                    } else if ui.button("Weiter ➡").clicked() || advance_pressed {
-                                        advance_chapter = true;
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::BOTTOM), |ui| {
+                            if self.waiting_for_choice.is_none() && !self.is_in_menu {
+                                let advance_pressed = binds.player_advance.is_pressed(ui);
+                                let skip_pressed = binds.player_skip.is_pressed(ui);
+
+                                if visible_chars < self.current_text.len() {
+                                    if ui.button("⏭ Überspringen").clicked() || skip_pressed {
+                                        skip_text = true;
                                     }
+                                } else if ui.button("Weiter ➡").clicked() || advance_pressed {
+                                    advance_chapter = true;
                                 }
-                            });
+                            }
                         });
                     });
-
-                    self.draw_portrait_column(
-                        ui,
-                        inactive_char,
-                        portrait_frame,
-                        char_frame_image.as_deref(),
-                        egui::vec2(portrait_width, textbox_height),
-                        self.char_fade,
-                    );
                 });
-            });
+        } else {
+            // Querformat: Porträts in Spalten links und rechts der Textbox
+            let mut text_ui = ui.new_child(egui::UiBuilder::new().max_rect(textbox_rect));
+            egui::Frame::default()
+                .fill(box_bg)
+                .stroke(if show_text_frame { egui::Stroke::new(2.0, frame_color) } else { egui::Stroke::NONE })
+                .inner_margin(0.0)
+                .show(&mut text_ui, |ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+
+                    let portrait_width = textbox_height * 0.8;
+                    let text_width = (textbox_rect.width() - (portrait_width * 2.0)).max(100.0);
+
+                    ui.horizontal(|ui| {
+                        self.draw_portrait_column(
+                            ui,
+                            active_char,
+                            portrait_frame,
+                            char_frame_image.as_deref(),
+                            egui::vec2(portrait_width, textbox_height),
+                            self.char_fade,
+                        );
+
+                        let (mid_rect, _) = ui.allocate_exact_size(egui::vec2(text_width, textbox_height), egui::Sense::hover());
+                        let mut mid_ui = ui.new_child(egui::UiBuilder::new().max_rect(mid_rect));
+
+                        egui::Frame::default().inner_margin(20.0).show(&mut mid_ui, |ui| {
+                            ui.vertical(|ui| {
+                                if let Some(speaker) = &self.current_speaker {
+                                    ui.heading(egui::RichText::new(speaker).color(egui::Color32::from_rgb(100, 200, 255)));
+                                } else {
+                                    ui.heading(egui::RichText::new("Erzähler").italics().color(egui::Color32::GRAY));
+                                }
+
+                                ui.add_space(10.0);
+                                
+                                let mut visible_chars = self.current_text.len();
+                                if self.text_target_duration > 0.0 && self.text_elapsed_time < self.text_target_duration {
+                                    let ratio = self.text_elapsed_time / self.text_target_duration;
+                                    visible_chars = (self.current_text.len() as f32 * ratio).floor() as usize;
+                                    ui.ctx().request_repaint();
+                                }
+                                
+                                let visible_text: String = self.current_text.chars().take(visible_chars).collect();
+                                ui.label(egui::RichText::new(&visible_text).size(20.0));
+
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::BOTTOM), |ui| {
+                                    if self.waiting_for_choice.is_none() && !self.is_in_menu {
+                                        
+                                        let advance_pressed = binds.player_advance.is_pressed(ui);
+                                        let skip_pressed = binds.player_skip.is_pressed(ui);
+
+                                        if visible_chars < self.current_text.len() {
+                                            if ui.button("⏭ Überspringen").clicked() || skip_pressed {
+                                                skip_text = true;
+                                            }
+                                        } else if ui.button("Weiter ➡").clicked() || advance_pressed {
+                                            advance_chapter = true;
+                                        }
+                                    }
+                                });
+                            });
+                        });
+
+                        self.draw_portrait_column(
+                            ui,
+                            inactive_char,
+                            portrait_frame,
+                            char_frame_image.as_deref(),
+                            egui::vec2(portrait_width, textbox_height),
+                            self.char_fade,
+                        );
+                    });
+                });
+        }
 
         if skip_text {
             self.text_elapsed_time = self.text_target_duration;
@@ -585,6 +794,7 @@ impl VnPlayer {
 
         if let Some((_, options)) = &self.waiting_for_choice {
             let mut choice_made = None;
+            let btn_width = (full_rect.width() - 40.0).clamp(240.0, 420.0);
             
             egui::Window::new("Entscheidung")
                 .title_bar(false)
@@ -592,15 +802,15 @@ impl VnPlayer {
                 .collapsible(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, -50.0])
                 .show(ui.ctx(), |ui| {
-                    egui::Frame::NONE.inner_margin(20.0).show(ui, |ui| {
+                    egui::Frame::NONE.inner_margin(16.0).show(ui, |ui| {
                         ui.vertical_centered(|ui| {
                             for opt in options {
-                                ui.add_space(10.0);
-                                if ui.add_sized([400.0, 50.0], egui::Button::new(egui::RichText::new(&opt.text).size(20.0))).clicked() {
+                                ui.add_space(8.0);
+                                if ui.add_sized([btn_width, 48.0], egui::Button::new(egui::RichText::new(&opt.text).size(18.0))).clicked() {
                                     choice_made = Some(opt.target_label.clone());
                                 }
                             }
-                            ui.add_space(10.0);
+                            ui.add_space(8.0);
                         });
                     });
                 });
@@ -622,9 +832,11 @@ impl VnPlayer {
         }
 
         if self.show_history {
+            let log_w = (full_rect.width() - 30.0).clamp(280.0, 800.0);
+            let log_h = (full_rect.height() - 50.0).clamp(350.0, 600.0);
             egui::Window::new("Logbuch")
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .fixed_size([800.0, 600.0])
+                .fixed_size([log_w, log_h])
                 .collapsible(false)
                 .resizable(false)
                 .show(ui.ctx(), |ui| {
@@ -664,6 +876,7 @@ impl VnPlayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::Theme;
 
     #[test]
     fn test_typewriter_duration_math() {
@@ -703,5 +916,48 @@ mod tests {
         };
         let player = VnPlayer::new(chapter);
         assert_eq!(player.current_text, "Reach this");
+    }
+
+    #[test]
+    fn test_theme_aspect_ratio_serialization() {
+        let theme = Theme {
+            textbox_color: None,
+            frame_color: None,
+            show_character_frames: None,
+            show_textbox_frame: None,
+            character_frame_image: None,
+            aspect_ratio: Some(AspectRatio::Portrait),
+        };
+        let json = serde_json::to_string(&theme).unwrap();
+        assert!(json.contains("\"aspect_ratio\":\"Portrait\""));
+
+        let deserialized: Theme = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.aspect_ratio, Some(AspectRatio::Portrait));
+    }
+
+    #[test]
+    fn test_theme_backwards_compatibility_without_aspect() {
+        let json = r#"{"textbox_color":null,"frame_color":null,"show_character_frames":null,"show_textbox_frame":null}"#;
+        let deserialized: Theme = serde_json::from_str(json).unwrap();
+        assert_eq!(deserialized.aspect_ratio, None);
+        assert_eq!(deserialized.character_frame_image, None);
+    }
+
+    #[test]
+    fn test_player_chapter_aspect_helper() {
+        let chapter = Chapter {
+            title: "Vertical VN".to_string(),
+            theme: Some(Theme {
+                textbox_color: None,
+                frame_color: None,
+                show_character_frames: None,
+                show_textbox_frame: None,
+                character_frame_image: None,
+                aspect_ratio: Some(AspectRatio::Portrait),
+            }),
+            actions: vec![],
+        };
+        let player = VnPlayer::new(chapter);
+        assert_eq!(player.chapter_aspect(), Some(AspectRatio::Portrait));
     }
 }

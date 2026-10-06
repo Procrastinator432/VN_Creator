@@ -103,6 +103,15 @@ impl eframe::App for VisualNovelApp {
                             go_back = true;
                         }
                     }
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let is_vert = ui.ctx().content_rect().height() > ui.ctx().content_rect().width();
+                        let toggle_txt = if is_vert { "🖥 16:9 Querformat" } else { "📱 9:16 Hochformat" };
+                        if ui.button(toggle_txt).clicked() {
+                            let sz = if is_vert { egui::vec2(1200.0, 800.0) } else { egui::vec2(450.0, 800.0) };
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::InnerSize(sz));
+                        }
+                    });
                 });
             });
         }
@@ -371,6 +380,7 @@ fn print_cli_help() {
     println!("  VN_Creator --player <pfad>   Startet den Player direkt mit der angegebenen Kapitel-JSON");
     println!("  VN_Creator <pfad.json>       Startet den Player direkt mit der angegebenen Datei");
     println!("  VN_Creator --editor [pfad]   Startet den Editor direkt (optional mit geladenem Kapitel)");
+    println!("  VN_Creator --portrait, -v    Startet im Hochformat / Portrait (9:16 Mobile-Layout)");
     println!("  VN_Creator --help, -h        Zeigt diese Hilfe an");
 }
 
@@ -438,9 +448,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let initial_state = parse_cli_state(&args);
 
+    let mut is_portrait = args.iter().any(|a| a == "--portrait" || a == "--vertical" || a == "-v");
+    if !is_portrait {
+        match &initial_state {
+            AppState::Playing(player) => {
+                if player.chapter_aspect() == Some(models::AspectRatio::Portrait) {
+                    is_portrait = true;
+                }
+            }
+            AppState::Editing(editor) => {
+                if editor.chapter.theme.as_ref().and_then(|t| t.aspect_ratio) == Some(models::AspectRatio::Portrait) {
+                    is_portrait = true;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let initial_size = if is_portrait {
+        [450.0, 800.0]
+    } else {
+        [1200.0, 800.0]
+    };
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1200.0, 800.0])
+            .with_inner_size(initial_size)
             .with_title("Visual Novel Studio"),
         ..Default::default()
     };

@@ -440,6 +440,7 @@ mod tests {
                 show_character_frames: None,
                 show_textbox_frame: None,
                 character_frame_image: Some("assets/pictures/frames/missing_frame.png".to_string()),
+                aspect_ratio: None,
             }),
             actions: vec![
                 Action::Dialogue {

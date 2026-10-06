@@ -1,5 +1,5 @@
 use eframe::egui;
-use crate::models::{Chapter, Action, Theme, ChoiceOption};
+use crate::models::{Chapter, Action, Theme, ChoiceOption, AspectRatio};
 use crate::settings::Settings;
 use std::path::PathBuf;
 use std::collections::HashMap;
@@ -366,6 +366,15 @@ impl VnEditor {
                             }
                         }
                     }
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let is_vert = ui.ctx().content_rect().height() > ui.ctx().content_rect().width();
+                    let toggle_txt = if is_vert { "🖥 Fenster: 16:9 Querformat" } else { "📱 Fenster: 9:16 Hochformat" };
+                    if ui.button(toggle_txt).clicked() {
+                        let sz = if is_vert { egui::vec2(1200.0, 800.0) } else { egui::vec2(450.0, 800.0) };
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::InnerSize(sz));
+                    }
+                });
             });
         });
 
@@ -390,6 +399,7 @@ impl VnEditor {
                             show_character_frames: None,
                             show_textbox_frame: None,
                             character_frame_image: None,
+                            aspect_ratio: None,
                         });
                     }
                 } else {
@@ -404,6 +414,35 @@ impl VnEditor {
                             if ui.checkbox(&mut show_box, "Textbox-Rahmen anzeigen").changed() { theme.show_textbox_frame = Some(show_box); }
                             ui.separator();
                             Self::optional_path_edit_with_browser(ui, "Charakter-Rahmen (Bild):", &mut theme.character_frame_image, "assets/pictures/frames");
+                            ui.separator();
+                            ui.horizontal(|ui| {
+                                ui.label("Format / Seitenverhältnis:");
+                                let current_aspect = theme.aspect_ratio.unwrap_or(AspectRatio::Auto);
+                                egui::ComboBox::from_id_salt("theme_aspect_ratio_select")
+                                    .selected_text(current_aspect.as_str())
+                                    .show_ui(ui, |ui| {
+                                        if ui.selectable_label(current_aspect == AspectRatio::Auto, AspectRatio::Auto.as_str()).clicked() {
+                                            theme.aspect_ratio = Some(AspectRatio::Auto);
+                                        }
+                                        if ui.selectable_label(current_aspect == AspectRatio::Landscape, AspectRatio::Landscape.as_str()).clicked() {
+                                            theme.aspect_ratio = Some(AspectRatio::Landscape);
+                                        }
+                                        if ui.selectable_label(current_aspect == AspectRatio::Portrait, AspectRatio::Portrait.as_str()).clicked() {
+                                            theme.aspect_ratio = Some(AspectRatio::Portrait);
+                                        }
+                                    });
+                                if theme.aspect_ratio.is_some() && ui.button("🗑 Reset").clicked() {
+                                    theme.aspect_ratio = None;
+                                }
+                            });
+                            if theme.aspect_ratio == Some(AspectRatio::Portrait) {
+                                ui.horizontal(|ui| {
+                                    ui.label("📱 Format ist auf Hochformat (9:16) eingestellt.");
+                                    if ui.button("Fenster anpassen (9:16)").clicked() {
+                                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(450.0, 800.0)));
+                                    }
+                                });
+                            }
                             ui.separator();
                             if ui.button("🗑 Theme löschen (Standard nutzen)").clicked() { delete_theme = true; }
                         });
